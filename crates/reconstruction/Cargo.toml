@@ -1,0 +1,10 @@
+[package]
+name = "reconstruction"
+description = "Deterministic geometry/typography heuristics that rebuild an editable document from PDF page content. No ML."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+pdf_source.workspace = true

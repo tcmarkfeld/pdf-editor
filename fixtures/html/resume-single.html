@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: 612pt 792pt; margin: 0; }
+  body { margin: 0; font-family: "Helvetica"; font-size: 10.5pt; line-height: 1.3; color: #111; }
+  .page { padding: 48pt 54pt; }
+  h1 { font-size: 22pt; margin: 0 0 2pt 0; letter-spacing: 0.5pt; }
+  .contact { font-size: 9.5pt; color: #444; margin-bottom: 10pt; }
+  .contact a { color: #1a4f9c; text-decoration: none; }
+  h2 { font-size: 11.5pt; text-transform: uppercase; letter-spacing: 1pt; margin: 14pt 0 4pt 0;
+       border-bottom: 0.75pt solid #333; padding-bottom: 2pt; }
+  .row { display: flex; justify-content: space-between; }
+  .company { font-weight: bold; }
+  .title { font-style: italic; }
+  .job { margin-bottom: 8pt; }
+  ul { margin: 3pt 0 0 0; padding-left: 16pt; }
+  li { margin: 1pt 0; }
+  p { margin: 0 0 4pt 0; }
+  table { border-collapse: collapse; font-size: 9.5pt; margin-top: 4pt; }
+  td, th { border: 0.5pt solid #777; padding: 2pt 6pt; text-align: left; }
+</style>
+</head>
+<body><div class="page">
+  <h1>Jordan Avery</h1>
+  <div class="contact">St. Petersburg, FL · (555) 010-2233 · <a href="mailto:jordan@example.com">jordan@example.com</a> · <a href="https://github.com/jordan-avery">github.com/jordan-avery</a></div>
+
+  <h2>Summary</h2>
+  <p>Software engineer with eight years of experience building distributed systems, developer tooling, and data platforms. Enjoys turning ambiguous product problems into reliable, well-instrumented services and mentoring engineers along the way.</p>
+
+  <h2>Experience</h2>
+  <div class="job">
+    <div class="row"><span class="company">FirmPilot</span><span>2024 – Present</span></div>
+    <div class="row"><span class="title">Senior Software Engineer</span><span>St. Petersburg, FL</span></div>
+    <p>Built distributed systems for ingesting and ranking legal marketing data across thousands of client sites.</p>
+    <ul>
+      <li>Designed an event pipeline processing 40M records per day with exactly-once delivery guarantees and replay tooling.</li>
+      <li>Led migration of the reporting stack to columnar storage, cutting query latency by 70%.</li>
+      <li>Mentored four engineers and introduced a lightweight design review process.</li>
+    </ul>
+  </div>
+  <div class="job">
+    <div class="row"><span class="company">Northwind Analytics</span><span>2019 – 2024</span></div>
+    <div class="row"><span class="title">Software Engineer</span><span>Tampa, FL</span></div>
+    <ul>
+      <li>Built feature one: a self-serve dashboard builder used by 300+ customers.</li>
+      <li>Built feature two: streaming alerts with sub-second evaluation.</li>
+    </ul>
+  </div>
+
+  <h2>Skills</h2>
+  <table>
+    <tr><th>Area</th><th>Tools</th><th>Years</th></tr>
+    <tr><td>Languages</td><td>Rust, Go, TypeScript, Python</td><td>8</td></tr>
+    <tr><td>Data</td><td>Postgres, Kafka, ClickHouse</td><td>6</td></tr>
+    <tr><td>Cloud</td><td>AWS, Terraform, Kubernetes</td><td>5</td></tr>
+  </table>
+
+  <h2>Education</h2>
+  <div class="row"><span class="company">University of Florida</span><span>2014 – 2018</span></div>
+  <div class="row"><span>B.S. Computer Science</span><span>Gainesville, FL</span></div>
+</div></body>
+</html>

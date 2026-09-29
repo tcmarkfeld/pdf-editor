@@ -1,0 +1,11 @@
+[package]
+name = "pdf_source"
+description = "PDF input layer: PDFium-backed extraction of glyphs, fonts, images, paths and links, plus reference rendering."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+pdfium-render.workspace = true
+image.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "fonts"
+description = "Font resolution: maps source font requests to installed fonts deterministically and records substitutions."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+parley.workspace = true

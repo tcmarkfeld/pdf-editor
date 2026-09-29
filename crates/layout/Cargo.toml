@@ -1,0 +1,15 @@
+[package]
+name = "layout"
+description = "Layout engine: shaping via Parley, block flow, columns, tables, pagination, hit testing."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+fonts.workspace = true
+parley.workspace = true
+
+[dev-dependencies]
+reconstruction.workspace = true
+pdf_source.workspace = true

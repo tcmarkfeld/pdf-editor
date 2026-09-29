@@ -1,0 +1,23 @@
+[package]
+name = "app"
+description = "Native desktop editor."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "reflow"
+path = "src/main.rs"
+
+[dependencies]
+document.workspace = true
+pdf_source.workspace = true
+reconstruction.workspace = true
+layout.workspace = true
+editor.workspace = true
+render.workspace = true
+export.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+image.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "render"
+description = "Rendering of laid-out pages: GPU glyph-atlas meshes for egui/wgpu, and a CPU rasterizer for export previews, visual diffing and tests."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+layout.workspace = true
+parley.workspace = true
+swash.workspace = true
+tiny-skia.workspace = true
+etagere.workspace = true
+epaint.workspace = true
+image.workspace = true
+
+[dev-dependencies]
+pdf_source.workspace = true
+reconstruction.workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "export"
+description = "PDF export of the laid-out document: vector text with embedded font subsets, images, paths, links."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+layout.workspace = true
+krilla.workspace = true
+
+[dev-dependencies]
+pdf_source.workspace = true
+reconstruction.workspace = true
+editor.workspace = true
+image.workspace = true

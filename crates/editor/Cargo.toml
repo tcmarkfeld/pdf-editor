@@ -1,0 +1,15 @@
+[package]
+name = "editor"
+description = "Editing engine: selections, text operations, navigation, clipboard and undo/redo over the document model."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+document.workspace = true
+layout.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+pdf_source.workspace = true
+reconstruction.workspace = true
