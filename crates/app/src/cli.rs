@@ -20,7 +20,7 @@ pub fn run(args: &[String]) -> Option<i32> {
         ("convert", [input, out]) => load(input).and_then(|d| d.save(Path::new(out)).map_err(|e| e.to_string())),
         ("export", [input, out]) => load(input).and_then(|d| {
             let laid = layout::Layouter::new().layout(&d);
-            let bytes = export::export_pdf(&laid)?;
+            let bytes = crate::persist::pdf_bytes(&d, &laid)?;
             std::fs::write(out, bytes).map_err(|e| e.to_string())
         }),
         ("compare", [input, dir, rest @ ..]) => compare(input, Path::new(dir), rest.first().and_then(|s| s.parse().ok()).unwrap_or(1.5)),
@@ -47,6 +47,10 @@ fn load(input: &str) -> Result<Document, String> {
     }
     let start = Instant::now();
     let src = pdf_source::PdfSource::open(path)?;
+    if let Some(doc) = crate::persist::embedded_document(&src) {
+        eprintln!("restored the editable document embedded by Reflow");
+        return Ok(doc);
+    }
     let mut sections = Vec::new();
     for i in 0..src.page_count() {
         let (section, analysis) = reconstruction::import_page(&src, i)?;

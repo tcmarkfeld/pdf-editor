@@ -21,3 +21,8 @@ eframe.workspace = true
 egui.workspace = true
 rfd.workspace = true
 image.workspace = true
+arboard = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+muda = { version = "0.20", default-features = false }

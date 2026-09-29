@@ -9,7 +9,7 @@ pub struct Capture {
     exit: bool,
     settled_frames: u32,
     requested: bool,
-    script: Option<String>,
+    script: std::collections::VecDeque<String>,
 }
 
 impl Capture {
@@ -20,13 +20,18 @@ impl Capture {
             exit: std::env::var_os("REFLOW_EXIT").is_some(),
             settled_frames: 0,
             requested: false,
-            script: std::env::var("REFLOW_SCRIPT").ok(),
+            script: std::env::var("REFLOW_SCRIPT").unwrap_or_default().split(';').filter(|s| !s.is_empty()).map(str::to_string).collect(),
         })
     }
 
-    /// `REFLOW_SCRIPT` steps (separated by `;`), handed out once.
-    pub fn take_script(&mut self) -> Vec<String> {
-        self.script.take().map(|s| s.split(';').map(str::to_string).collect()).unwrap_or_default()
+    /// Next `REFLOW_SCRIPT` step (steps are `;`-separated, one per frame so
+    /// every intermediate state is painted, as with real input).
+    pub fn next_step(&mut self) -> Option<String> {
+        self.script.pop_front()
+    }
+
+    pub fn script_done(&self) -> bool {
+        self.script.is_empty()
     }
 
     /// `ready` should be true once content the screenshot must show is loaded.
@@ -54,5 +59,20 @@ impl Capture {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
         ctx.request_repaint();
+    }
+}
+
+/// Script steps that are raw pointer input, in window points:
+/// `mouse:x:y` clicks, `hover:x:y` moves the pointer.
+pub fn pointer_events(step: &str) -> Option<Vec<egui::Event>> {
+    let (cmd, arg) = step.split_once(':')?;
+    let v: Vec<f32> = arg.split(':').filter_map(|s| s.parse().ok()).collect();
+    let [x, y] = v[..] else { return None };
+    let pos = egui::pos2(x, y);
+    let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    match cmd {
+        "hover" => Some(vec![egui::Event::PointerMoved(pos)]),
+        "mouse" => Some(vec![egui::Event::PointerMoved(pos), button(true), button(false)]),
+        _ => None,
     }
 }

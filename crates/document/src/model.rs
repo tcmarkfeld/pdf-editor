@@ -367,6 +367,9 @@ pub struct TableRow {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TableCell {
     pub blocks: Vec<Block>,
+    /// Background fill.
+    #[serde(default)]
+    pub shading: Option<Rgba>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -388,6 +391,7 @@ pub struct ImageBlock {
 pub struct Rule {
     pub space_before: f32,
     pub x: f32,
+    /// Zero or negative: extend to the flow's right edge.
     pub width: f32,
     pub thickness: f32,
     pub color: Rgba,

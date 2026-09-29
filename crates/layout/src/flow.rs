@@ -91,7 +91,8 @@ impl Ctx<'_> {
                 Block::Rule(r) => {
                     pos.y += r.space_before;
                     self.ensure(area, pos, r.thickness);
-                    let rect = Rect::from_xywh(area.x + r.x, pos.y, r.width, r.thickness);
+                    let w = if r.width > 0.0 { r.width } else { area.w - r.x };
+                    let rect = Rect::from_xywh(area.x + r.x, pos.y, w, r.thickness);
                     self.pages[pos.page].items.push(Item::Rect { rect, color: r.color });
                     pos.y += r.thickness;
                 }
@@ -120,6 +121,7 @@ impl Ctx<'_> {
                         self.ensure(area, pos, row.min_height);
                         let start = *pos;
                         let mut end = Pos { page: start.page, y: start.y + row.min_height };
+                        let shade_at = self.pages[start.page].items.len();
                         let mut cx = x0;
                         for (ci, cell) in row.cells.iter().enumerate() {
                             let w = t.col_widths.get(ci).copied().unwrap_or(0.0);
@@ -127,6 +129,20 @@ impl Ctx<'_> {
                             self.blocks(&cell.blocks, Area { x: cx, w, ..area }, &mut p);
                             end = end.max(p);
                             cx += w;
+                        }
+                        if end.page == start.page {
+                            // Shading goes beneath the cell content already emitted.
+                            let mut cx = x0;
+                            let mut shades = Vec::new();
+                            for (ci, cell) in row.cells.iter().enumerate() {
+                                let w = t.col_widths.get(ci).copied().unwrap_or(0.0);
+                                if let Some(color) = cell.shading {
+                                    shades.push(Item::Rect { rect: Rect::new(cx, start.y, cx + w, end.y), color });
+                                }
+                                cx += w;
+                            }
+                            let items = &mut self.pages[start.page].items;
+                            items.splice(shade_at..shade_at, shades);
                         }
                         if let Some(b) = t.borders
                             && end.page == start.page

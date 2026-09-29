@@ -20,6 +20,8 @@ pub enum Response {
     Opened { page_sizes: Vec<(f32, f32)> },
     Rendered { page: u32, scale: f32, image: RgbaImage },
     Reconstructed { index: u32, section: document::Section, analysis: Box<PageAnalysis> },
+    /// The PDF carries its own editable document (saved by Reflow).
+    Restored(document::Document),
     Failed(String),
 }
 
@@ -63,6 +65,10 @@ fn run(path: PathBuf, rx: Receiver<Request>, tx: Sender<Response>, wake: impl Fn
 
     let mut renders: VecDeque<(u32, f32)> = VecDeque::new();
     let mut next_extract = 0;
+    if let Some(doc) = crate::persist::embedded_document(&source) {
+        send(Response::Restored(doc));
+        next_extract = count;
+    }
     loop {
         // Collect everything queued; block only when there is nothing to do.
         loop {

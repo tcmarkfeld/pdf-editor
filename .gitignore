@@ -2,3 +2,4 @@
 /vendor/pdfium
 .DS_Store
 *.reflow.tmp
+/dist

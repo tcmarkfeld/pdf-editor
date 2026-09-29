@@ -23,25 +23,37 @@ pub const FORMAT_VERSION: u32 = 1;
 struct SavedDocument {
     format: String,
     version: u32,
+    /// Fingerprint of the PDF text this document was saved alongside (see
+    /// `pdf_source::PdfSource::text_fingerprint`); lets a reader tell whether
+    /// the PDF was changed by another program since.
+    #[serde(default)]
+    fingerprint: Option<u64>,
     document: Document,
 }
 
 impl Document {
+    /// Serialized editable document, optionally tied to a PDF fingerprint.
+    pub fn to_bytes(&self, fingerprint: Option<u64>) -> io::Result<Vec<u8>> {
+        let saved = SavedDocument { format: "reflow".into(), version: FORMAT_VERSION, fingerprint, document: self.clone() };
+        serde_json::to_vec(&saved).map_err(io::Error::other)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> io::Result<(Document, Option<u64>)> {
+        let saved: SavedDocument = serde_json::from_slice(bytes).map_err(io::Error::other)?;
+        if saved.format != "reflow" || saved.version > FORMAT_VERSION {
+            return Err(io::Error::other(format!("unsupported document format {} v{}", saved.format, saved.version)));
+        }
+        Ok((saved.document, saved.fingerprint))
+    }
+
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let saved = SavedDocument { format: "reflow".into(), version: FORMAT_VERSION, document: self.clone() };
-        let json = serde_json::to_vec(&saved).map_err(io::Error::other)?;
         let tmp = path.with_extension("reflow.tmp");
-        std::fs::write(&tmp, json)?;
+        std::fs::write(&tmp, self.to_bytes(None)?)?;
         std::fs::rename(tmp, path)
     }
 
     pub fn load(path: &Path) -> io::Result<Document> {
-        let bytes = std::fs::read(path)?;
-        let saved: SavedDocument = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        if saved.format != "reflow" || saved.version > FORMAT_VERSION {
-            return Err(io::Error::other(format!("unsupported document format {} v{}", saved.format, saved.version)));
-        }
-        Ok(saved.document)
+        Ok(Self::from_bytes(&std::fs::read(path)?)?.0)
     }
 }
 

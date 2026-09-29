@@ -67,6 +67,26 @@ impl Document {
         Some((flow, *last as usize))
     }
 
+    /// Any block by section and path (see [`ParaRef`]).
+    pub fn block(&self, section: usize, path: &[u32]) -> Option<&Block> {
+        block_at(&self.sections.get(section)?.blocks, path)
+    }
+
+    pub fn block_mut(&mut self, section: usize, path: &[u32]) -> Option<&mut Block> {
+        block_at_mut(&mut Arc::make_mut(self.sections.get_mut(section)?).blocks, path)
+    }
+
+    /// The flow (block list) that contains the block at `path`.
+    pub fn flow_of_mut(&mut self, section: usize, path: &[u32]) -> Option<&mut Vec<Block>> {
+        let s = Arc::make_mut(self.sections.get_mut(section)?);
+        let (_, parent) = path.split_last()?;
+        let mut flow = &mut s.blocks;
+        for pair in parent.chunks(2) {
+            flow = flow.get_mut(pair[0] as usize)?.child_mut(pair[1] as usize)?;
+        }
+        Some(flow)
+    }
+
     pub fn section_mut(&mut self, i: usize) -> &mut Section {
         Arc::make_mut(&mut self.sections[i])
     }

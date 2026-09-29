@@ -9,7 +9,12 @@
 //! edits copy only the section they touch (`Arc::make_mut`), so history is
 //! cheap even for long documents. Consecutive typing coalesces into one step.
 
+mod format;
 mod ops;
+mod table;
+
+pub use format::BlockType;
+pub use table::TableCursor;
 
 use std::sync::Arc;
 
@@ -94,6 +99,8 @@ pub struct Editor {
     last_edit: Option<EditKind>,
     goal_x: Option<f32>,
     pub clipboard: Option<RichClip>,
+    /// Style for the next typed text, set by formatting a collapsed caret.
+    pending_style: Option<document::TextStyle>,
     /// Incremented on every document change.
     pub revision: u64,
 }
@@ -110,6 +117,7 @@ impl Editor {
             last_edit: None,
             goal_x: None,
             clipboard: None,
+            pending_style: None,
             revision: 0,
         }
     }
@@ -166,6 +174,7 @@ impl Editor {
     /// Ends typing coalescing (e.g. after a caret move).
     fn break_coalescing(&mut self) {
         self.last_edit = None;
+        self.pending_style = None;
     }
 
     pub fn can_undo(&self) -> bool {
@@ -197,7 +206,6 @@ impl Editor {
     /// Installs a section that finished reconstructing in the background,
     /// in the live document and throughout history (it is not an edit).
     pub fn replace_section(&mut self, index: usize, section: Arc<Section>) {
-        let before = self.paras.iter().filter(|p| p.section < index).count();
         let old_count = self.paras.iter().filter(|p| p.section == index).count();
         if index >= self.doc.sections.len() {
             return;
@@ -208,16 +216,18 @@ impl Editor {
                 s.sections[index] = section.clone();
             }
         }
-        self.paras = self.doc.paragraphs();
+        let old = std::mem::replace(&mut self.paras, self.doc.paragraphs());
         let new_count = self.paras.iter().filter(|p| p.section == index).count();
+        // Only positions inside later sections move; a position with no
+        // paragraph (e.g. the initial caret before anything loaded) doesn't.
         let shift = |p: &mut Pos| {
-            if p.para >= before + old_count {
+            if old.get(p.para).is_some_and(|r| r.section > index) {
                 p.para = p.para + new_count - old_count;
             }
         };
         shift(&mut self.sel.anchor);
         shift(&mut self.sel.focus);
-        self.revision += 1;
+        self.refresh();
     }
 
     // ---------------------------------------------------------------------
@@ -236,6 +246,7 @@ impl Editor {
     }
 
     pub fn select_all(&mut self) {
+        self.break_coalescing();
         let last = self.paras.len().saturating_sub(1);
         let end = if self.paras.is_empty() { 0 } else { self.paragraph(last).len() };
         self.sel = Selection { anchor: Pos::new(0, 0), focus: Pos::new(last, end) };

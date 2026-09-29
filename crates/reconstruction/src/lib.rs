@@ -103,7 +103,29 @@ pub fn reconstruct(page: &SourcePage) -> Reconstructed {
     if !lines.is_empty() {
         let x0 = lines.iter().map(|l| l.x0).fold(f32::MAX, f32::min);
         let x1 = lines.iter().map(|l| l.x1).fold(f32::MIN, f32::max);
-        let zones = zones::segment(&lines, (0..lines.len()).collect(), x0, x1, 0);
+        // Ruled grids first: they locate tables even when cells are empty.
+        let mut in_table = vec![false; lines.len()];
+        let mut tables = Vec::new();
+        for grid in graphics::ruled_grids(&gfx) {
+            let (xs, ys) = (&grid.xs, &grid.ys);
+            let frame = Rect::new(xs[0], ys[0], xs[xs.len() - 1], ys[ys.len() - 1]);
+            let mut rows = vec![vec![Vec::new(); xs.len() - 1]; ys.len() - 1];
+            for (i, l) in lines.iter().enumerate() {
+                let (cx, cy) = (l.center(), l.baseline - 0.3 * l.size);
+                if in_table[i] || !frame.contains(document::Point::new(cx, cy)) {
+                    continue;
+                }
+                let r = ys.windows(2).position(|w| cy >= w[0] && cy < w[1]).unwrap_or(0);
+                let c = xs.windows(2).position(|w| cx >= w[0] && cx < w[1]).unwrap_or(0);
+                rows[r][c].push(i);
+                in_table[i] = true;
+            }
+            let cols = xs.windows(2).map(|w| (w[0], w[1])).collect();
+            tables.push(Zone::Table { cols, rows, frame: Some(frame) });
+        }
+        let free = (0..lines.len()).filter(|&i| !in_table[i]).collect();
+        let mut zones = zones::segment(&lines, free, x0, x1, 0);
+        zones::insert_tables(&lines, &mut zones, tables);
         builder.claim_graphics(&zones);
         let placed = builder.zones(&mut ctx, &zones, x0, x1);
         let top = placed.iter().map(|p| p.top).fold(f32::MAX, f32::min);
@@ -206,6 +228,9 @@ struct Builder<'a> {
 
 impl Builder<'_> {
     fn zone_rect(&self, z: &Zone) -> Rect {
+        if let Zone::Table { frame: Some(f), .. } = z {
+            return *f;
+        }
         let mut ids = Vec::new();
         z.line_ids(&mut ids);
         ids.iter().fold(Rect::EMPTY, |r, &i| r.union(&self.lines[i].rect()))
@@ -311,7 +336,7 @@ impl Builder<'_> {
                     let block = Block::Columns(Columns { space_before: 0.0, columns });
                     out.push(Placed { top, bottom, block, rect, kind: "columns", score: None });
                 }
-                Zone::Table { cols, rows } => {
+                Zone::Table { cols, rows, .. } => {
                     self.analysis.zones.push((rect, "table"));
                     out.push(self.table(ctx, cols, rows, rect, fx0));
                 }
@@ -423,7 +448,8 @@ impl Builder<'_> {
                 let pad = lines.iter().map(|l| l.x0 - cx0).fold(f32::MAX, f32::min).max(0.0);
                 let right = if ruled { cx1 - pad } else { cx1 };
                 let placed = build_paragraphs(ctx, lines, cx0, right.max(cx0 + 1.0));
-                cells.push(TableCell { blocks: finalize(placed, tops[ri]) });
+                let blocks = if placed.is_empty() { vec![self.empty_cell_paragraph(ctx)] } else { finalize(placed, tops[ri]) };
+                cells.push(TableCell { blocks, shading: None });
             }
             trows.push(TableRow { min_height: round2(tops[ri + 1] - tops[ri]), cells });
         }
@@ -443,6 +469,24 @@ impl Builder<'_> {
             borders,
         });
         Placed { top: tops[0], bottom: *tops.last().expect("tops"), block, rect, kind: "table", score: None }
+    }
+
+    /// An empty, editable paragraph for a cell with no text, in body style.
+    fn empty_cell_paragraph(&self, ctx: &PageContext) -> Block {
+        let mut style = self.lines.iter().find_map(|l| l.glyphs.first()).map(|g| ctx.styles.style(g, 0.0)).unwrap_or_default();
+        style.size = ctx.body_size;
+        style.font.weight = 400;
+        style.font.italic = false;
+        style.link = None;
+        style.underline = false;
+        let pstyle = document::ParagraphStyle {
+            indent_left: 5.0,
+            indent_right: 5.0,
+            space_before: 3.0,
+            line_spacing: document::LineSpacing::Multiple(1.2),
+            ..Default::default()
+        };
+        Block::Paragraph(document::Paragraph::new("", style, pstyle))
     }
 
     /// Everything not represented in the flow becomes an absolute decoration.

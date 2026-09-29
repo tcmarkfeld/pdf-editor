@@ -62,6 +62,10 @@ impl FontSystem {
         Self { fcx: FontContext::new(), cache: HashMap::new() }
     }
 
+    pub fn is_installed(&mut self, name: &str) -> bool {
+        self.installed(name).is_some()
+    }
+
     fn installed(&mut self, name: &str) -> Option<String> {
         self.fcx.collection.family_by_name(name).map(|f| f.name().to_string())
     }

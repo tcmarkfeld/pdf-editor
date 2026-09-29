@@ -18,7 +18,9 @@ use crate::lines::Line;
 pub enum Zone {
     Flow { lines: Vec<usize>, x0: f32, x1: f32 },
     Columns { cols: Vec<ColumnZone> },
-    Table { cols: Vec<(f32, f32)>, rows: Vec<Vec<Vec<usize>>> },
+    /// `frame` is set for tables found from their ruling grid (which may
+    /// have empty cells, so the text alone doesn't locate them).
+    Table { cols: Vec<(f32, f32)>, rows: Vec<Vec<Vec<usize>>>, frame: Option<document::Rect> },
 }
 
 #[derive(Debug)]
@@ -222,7 +224,7 @@ fn classify(lines: &[Line], gutters: &[(f32, f32)], members: Vec<usize>, depth: 
                 )
             })
             .collect();
-        return Ok(Zone::Table { cols: bounds, rows });
+        return Ok(Zone::Table { cols: bounds, rows, frame: None });
     }
 
     if depth >= 3 || cols.iter().any(|c| c.len() < 2) {
@@ -241,4 +243,50 @@ fn classify(lines: &[Line], gutters: &[(f32, f32)], members: Vec<usize>, depth: 
 
 fn same_row_bl(baseline: f32, l: &Line) -> bool {
     (baseline - l.baseline).abs() <= 0.25 * l.size
+}
+
+/// Places ruled-grid tables among top-level zones in vertical order,
+/// splitting a flow that runs past a table into the parts above and below.
+pub fn insert_tables(lines: &[Line], zones: &mut Vec<Zone>, tables: Vec<Zone>) {
+    for table in tables {
+        let Zone::Table { frame: Some(frame), .. } = &table else { continue };
+        let top = frame.y0;
+        let mut table = Some(table);
+        let mut out = Vec::with_capacity(zones.len() + 2);
+        for z in zones.drain(..) {
+            if table.is_none() {
+                out.push(z);
+                continue;
+            }
+            match z {
+                Zone::Flow { lines: ids, x0, x1 } => {
+                    let (above, below): (Vec<usize>, Vec<usize>) = ids.into_iter().partition(|&i| lines[i].baseline < top);
+                    if !above.is_empty() {
+                        out.push(Zone::Flow { lines: above, x0, x1 });
+                    }
+                    if !below.is_empty() {
+                        out.extend(table.take());
+                        out.push(Zone::Flow { lines: below, x0, x1 });
+                    }
+                }
+                other => {
+                    if zone_top(lines, &other) >= top {
+                        out.extend(table.take());
+                    }
+                    out.push(other);
+                }
+            }
+        }
+        out.extend(table);
+        *zones = out;
+    }
+}
+
+pub fn zone_top(lines: &[Line], z: &Zone) -> f32 {
+    if let Zone::Table { frame: Some(f), .. } = z {
+        return f.y0;
+    }
+    let mut ids = Vec::new();
+    z.line_ids(&mut ids);
+    ids.iter().map(|&i| lines[i].top()).fold(f32::MAX, f32::min)
 }

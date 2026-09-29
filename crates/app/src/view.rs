@@ -15,7 +15,7 @@ use render::gpu::{self, Atlas, View};
 use crate::worker::{Request, Worker};
 
 /// Gap between pages, in document points.
-pub const PAGE_GAP: f32 = 16.0;
+pub const PAGE_GAP: f32 = 24.0;
 pub const MIN_ZOOM: f32 = 0.25;
 pub const MAX_ZOOM: f32 = 6.0;
 
@@ -74,6 +74,12 @@ pub struct DocView {
     diffs: HashMap<usize, (u64, u32, TextureHandle)>,
     pending_scroll: Option<Vec2>,
     scroll_to_caret: bool,
+    /// Set by ⌘K; the toolbar opens its link editor.
+    pub link_requested: bool,
+    /// Page nearest the middle of the viewport (for the status bar).
+    pub current_page: usize,
+    canvas_width: f32,
+    words: Option<(u64, usize)>,
     caret_epoch: f64,
 }
 
@@ -102,6 +108,10 @@ impl DocView {
             diffs: HashMap::new(),
             pending_scroll: None,
             scroll_to_caret: false,
+            link_requested: false,
+            current_page: 0,
+            canvas_width: 0.0,
+            words: None,
             caret_epoch: 0.0,
         }
     }
@@ -163,9 +173,55 @@ impl DocView {
                 _ => {}
             },
             "zoom" => self.zoom = arg.parse().unwrap_or(self.zoom),
+            "theme" => ctx.set_theme(if arg == "light" { egui::ThemePreference::Light } else { egui::ThemePreference::Dark }),
+            "action" => {
+                let a: Vec<&str> = arg.split(':').collect();
+                let e = &mut self.editor;
+                match a.as_slice() {
+                    ["table", r, c] => {
+                        let width = self.layout.para(e.sel.focus.para).width;
+                        e.insert_table(r.parse().unwrap_or(2), c.parse().unwrap_or(2), width);
+                    }
+                    ["shade_row"] => e.table_set_shading(Some(document::Rgba::rgb(217, 234, 211)), true),
+                    ["col_right"] => e.table_insert_col(true),
+                    ["row_below"] => e.table_insert_row(true),
+                    ["heading", l] => e.set_block_type(editor::BlockType::Heading(l.parse().unwrap_or(1))),
+                    ["rule"] => e.insert_rule(),
+                    _ => {}
+                }
+            }
             _ => {}
         }
+        if std::env::var_os("REFLOW_TRACE").is_some() {
+            eprintln!("step {step:?}: sel {:?} paras {}", self.editor.sel, self.editor.para_count());
+        }
         self.relayout();
+    }
+
+    /// Returns keyboard focus to the page canvas (after toolbar actions).
+    pub fn focus_canvas(&mut self, ctx: &egui::Context) {
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("canvas")));
+        self.scroll_to_caret = true;
+    }
+
+    /// Zoom so the widest page fills the canvas width.
+    pub fn fit_width(&mut self) {
+        let w = (0..self.layout.page_count()).map(|i| self.layout.page(i).size.w).fold(0.0, f32::max);
+        if w > 0.0 && self.canvas_width > 0.0 {
+            self.zoom = ((self.canvas_width - 48.0) / (w + 2.0 * PAGE_GAP)).clamp(MIN_ZOOM, MAX_ZOOM);
+        }
+    }
+
+    pub fn word_count(&mut self) -> usize {
+        let rev = self.editor.revision;
+        if let Some((r, n)) = self.words
+            && r == rev
+        {
+            return n;
+        }
+        let n = (0..self.editor.para_count()).map(|i| self.editor.paragraph(i).text().split_whitespace().count()).sum();
+        self.words = Some((rev, n));
+        n
     }
 
     pub fn zoom_by(&mut self, factor: f32) {
@@ -195,6 +251,7 @@ impl DocView {
         if let Some(offset) = self.pending_scroll.take() {
             area = area.scroll_offset(offset);
         }
+        self.canvas_width = ui.available_width();
         let out = area.show_viewport(ui, |ui, viewport| {
             let size = content.max(ui.available_size());
             let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -205,6 +262,8 @@ impl DocView {
             self.handle_pointer(ui, &response, &rects);
             self.handle_keys(ui, &response);
             let clip = viewport.translate(origin.to_vec2()).expand(100.0);
+            let mid = viewport.center().y + origin.y;
+            self.current_page = rects.iter().position(|r| r.bottom() + PAGE_GAP * self.zoom >= mid).unwrap_or(0);
             for (i, rect) in rects.iter().enumerate() {
                 if rect.intersects(clip) {
                     self.paint_page(ui, &painter, i, *rect, clip);
@@ -333,7 +392,18 @@ impl DocView {
             Key::Backspace => e.backspace(m.alt),
             Key::Delete => e.delete_forward(m.alt),
             Key::Enter => e.enter(),
-            Key::Tab if !m.command => e.insert_text("\t"),
+            Key::Tab if !m.command => {
+                // Tab moves between table cells and nests list items at
+                // their start; otherwise it types a tab.
+                let at_list_start = e.sel.is_collapsed() && e.sel.focus.offset == 0 && e.current_paragraph_style().list.is_some();
+                if !e.table_next_cell(m.shift) {
+                    if at_list_start || (m.shift && e.current_paragraph_style().list.is_some()) {
+                        e.change_indent(!m.shift);
+                    } else if !m.shift {
+                        e.insert_text("\t");
+                    }
+                }
+            }
             Key::A if m.command => e.select_all(),
             Key::Z if m.command && m.shift => e.redo(),
             Key::Z if m.command => e.undo(),
@@ -341,6 +411,21 @@ impl DocView {
             Key::B if m.command => e.toggle_style(|s| s.font.is_bold(), |s, on| s.font.weight = if on { 700 } else { 400 }),
             Key::I if m.command => e.toggle_style(|s| s.font.italic, |s, on| s.font.italic = on),
             Key::U if m.command => e.toggle_style(|s| s.underline, |s, on| s.underline = on),
+            Key::X if m.command && m.shift => e.toggle_style(|s| s.strike, |s, on| s.strike = on),
+            Key::K if m.command => self.link_requested = true,
+            Key::Num7 if m.command && m.shift => e.toggle_list(true),
+            Key::Num8 if m.command && m.shift => e.toggle_list(false),
+            Key::Num0 if m.command && m.alt => e.set_block_type(editor::BlockType::Normal),
+            Key::Num1 if m.command && m.alt => e.set_block_type(editor::BlockType::Heading(1)),
+            Key::Num2 if m.command && m.alt => e.set_block_type(editor::BlockType::Heading(2)),
+            Key::Num3 if m.command && m.alt => e.set_block_type(editor::BlockType::Heading(3)),
+            Key::OpenBracket if m.command => e.change_indent(false),
+            Key::CloseBracket if m.command => e.change_indent(true),
+            Key::L if m.command && m.shift => e.set_align(document::Align::Left),
+            Key::E if m.command && m.shift => e.set_align(document::Align::Center),
+            Key::R if m.command && m.shift => e.set_align(document::Align::Right),
+            Key::J if m.command && m.shift => e.set_align(document::Align::Justify),
+            Key::Backslash if m.command => e.clear_formatting(),
             _ => {}
         }
     }
@@ -367,8 +452,13 @@ impl DocView {
         let ctx = ui.ctx().clone();
         let ppp = ctx.pixels_per_point();
         let view = View { origin: rect.min, zoom: self.zoom, pixels_per_point: ppp };
-        painter.rect_filled(rect.translate(Vec2::new(2.0, 3.0)), 0.0, Color32::from_black_alpha(50));
-        painter.rect_filled(rect, 0.0, Color32::WHITE);
+        // Two soft shadows (ambient + contact) read as paper above the canvas.
+        let dark = ui.visuals().dark_mode;
+        let ambient = egui::epaint::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if dark { 120 } else { 26 }) };
+        let contact = egui::epaint::Shadow { offset: [0, 1], blur: 3, spread: 0, color: Color32::from_black_alpha(if dark { 140 } else { 30 }) };
+        painter.add(ambient.as_shape(rect, 1.0));
+        painter.add(contact.as_shape(rect, 1.0));
+        painter.rect_filled(rect, 1.0, Color32::WHITE);
 
         let page = self.layout.page(i);
         let section = page.section;
@@ -450,7 +540,7 @@ impl DocView {
         let sel = self.editor.sel;
         let (a, b) = sel.ordered();
         if !sel.is_collapsed() {
-            let fill = Color32::from_rgba_unmultiplied(60, 120, 230, 70);
+            let fill = Color32::from_rgba_unmultiplied(66, 133, 244, 64);
             for para in a.para..=b.para.min(self.layout.para_count().saturating_sub(1)) {
                 let pl = self.layout.para(para);
                 let on_page = pl.lines.iter().any(|l| self.layout.line_page(para, l) == i);
@@ -475,7 +565,7 @@ impl DocView {
             let t = ui.input(|i| i.time) - self.caret_epoch;
             if (t % 1.06) < 0.62 {
                 let r = view.rect(&r);
-                painter.line_segment([r.min, r.max], Stroke::new(1.5, Color32::from_rgb(20, 20, 20)));
+                painter.line_segment([r.min, r.max], Stroke::new(2.0, Color32::from_rgb(24, 24, 28)));
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
         }

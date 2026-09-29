@@ -17,7 +17,26 @@ use krilla::{Data, Document};
 use layout::{DocLayout, GlyphRun, Item};
 
 pub fn export_pdf(layout: &DocLayout) -> Result<Vec<u8>, String> {
+    export_pdf_with_attachment(layout, None)
+}
+
+/// Like [`export_pdf`], additionally embedding `(file name, bytes)` as a
+/// PDF attachment (used to carry the editable document inside the PDF).
+pub fn export_pdf_with_attachment(layout: &DocLayout, attachment: Option<(&str, &[u8])>) -> Result<Vec<u8>, String> {
     let mut doc = Document::new();
+    if let Some((name, bytes)) = attachment {
+        let file = krilla::embed::EmbeddedFile {
+            path: name.to_string(),
+            mime_type: krilla::embed::MimeType::new("application/json"),
+            description: Some("Editable document (Reflow)".into()),
+            association_kind: krilla::embed::AssociationKind::Source,
+            data: Data::from(bytes.to_vec()),
+            modification_date: None,
+            compress: Some(true),
+            location: None,
+        };
+        doc.embed_file(file).ok_or("could not embed the editable document")?;
+    }
     let mut fonts: HashMap<(u64, u32), Option<Font>> = HashMap::new();
     let mut images: HashMap<u64, Option<Image>> = HashMap::new();
     for i in 0..layout.page_count() {

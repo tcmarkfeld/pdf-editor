@@ -152,3 +152,80 @@ pub fn apply_dot_bullets(lines: &mut [Line], dots: &[(Rect, Rgba, usize)]) -> Ve
     }
     used
 }
+
+/// A table lattice formed by ruling lines: column and row boundaries.
+pub struct Grid {
+    pub xs: Vec<f32>,
+    pub ys: Vec<f32>,
+}
+
+/// Finds clean ruling grids: connected sets of rules whose distinct
+/// horizontal rules each span the full width and whose vertical rules each
+/// span the full height. Tables drawn this way are recognised even when
+/// their cells are empty.
+pub fn ruled_grids(g: &Graphics) -> Vec<Grid> {
+    let touches = |v: &VRule, h: &HRule| v.x >= h.x0 - 1.0 && v.x <= h.x1 + 1.0 && h.y >= v.y0 - 1.0 && h.y <= v.y1 + 1.0;
+    let (nh, nv) = (g.hrules.len(), g.vrules.len());
+    // Union-find over rules: indices 0..nh are horizontal, nh.. vertical.
+    let mut parent: Vec<usize> = (0..nh + nv).collect();
+    fn find(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    for (hi, h) in g.hrules.iter().enumerate() {
+        for (vi, v) in g.vrules.iter().enumerate() {
+            if touches(v, h) {
+                let (a, b) = (find(&mut parent, hi), find(&mut parent, nh + vi));
+                parent[a] = b;
+            }
+        }
+    }
+    let mut groups: std::collections::BTreeMap<usize, (Vec<usize>, Vec<usize>)> = Default::default();
+    for i in 0..nh + nv {
+        let root = find(&mut parent, i);
+        let e = groups.entry(root).or_default();
+        if i < nh { e.0.push(i) } else { e.1.push(i - nh) }
+    }
+    let dedup = |mut v: Vec<f32>| {
+        v.sort_by(f32::total_cmp);
+        v.dedup_by(|a, b| (*a - *b).abs() < 2.0);
+        v
+    };
+    let mut out = Vec::new();
+    for (hs, vs) in groups.into_values() {
+        let ys = dedup(hs.iter().map(|&i| g.hrules[i].y).collect());
+        let xs = dedup(vs.iter().map(|&i| g.vrules[i].x).collect());
+        if xs.len() < 2 || ys.len() < 2 {
+            continue;
+        }
+        let (x0, x1, y0, y1) = (xs[0], xs[xs.len() - 1], ys[0], ys[ys.len() - 1]);
+        // Coverage of each boundary by the union of its segments.
+        let covered = |segs: Vec<(f32, f32)>, lo: f32, hi: f32| {
+            let mut segs = segs;
+            segs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (mut total, mut cur) = (0.0, lo);
+            for (a, b) in segs {
+                let (a, b) = (a.max(cur), b.min(hi));
+                if b > a {
+                    total += b - a;
+                    cur = b;
+                }
+            }
+            total >= 0.9 * (hi - lo)
+        };
+        let rows_ok = ys.iter().all(|&y| {
+            covered(hs.iter().map(|&i| &g.hrules[i]).filter(|h| (h.y - y).abs() < 2.0).map(|h| (h.x0, h.x1)).collect(), x0, x1)
+        });
+        let cols_ok = xs.iter().all(|&x| {
+            covered(vs.iter().map(|&i| &g.vrules[i]).filter(|v| (v.x - x).abs() < 2.0).map(|v| (v.y0, v.y1)).collect(), y0, y1)
+        });
+        if rows_ok && cols_ok {
+            out.push(Grid { xs, ys });
+        }
+    }
+    out.sort_by(|a, b| a.ys[0].total_cmp(&b.ys[0]));
+    out
+}

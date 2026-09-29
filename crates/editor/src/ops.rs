@@ -1,6 +1,6 @@
 //! Document-mutating editor commands.
 
-use document::{Block, Role, TextRun, TextStyle};
+use document::{Block, Role, TextRun};
 
 use crate::{EditKind, Editor, Pos, Selection, next_grapheme, prev_grapheme, prev_word, next_word};
 
@@ -19,7 +19,8 @@ impl Editor {
             }
             let line = line.trim_end_matches('\r');
             let p = self.sel.focus;
-            self.paragraph_mut(p.para).insert(p.offset, line, None);
+            let pending = self.pending_style.take();
+            self.paragraph_mut(p.para).insert(p.offset, line, pending.as_ref());
             self.sel = Selection::caret(Pos::new(p.para, p.offset + line.len()));
         }
         self.refresh();
@@ -68,22 +69,33 @@ impl Editor {
         self.refresh();
     }
 
-    fn split_inner(&mut self) {
+    pub(crate) fn split_inner(&mut self) {
         let p = self.sel.focus;
         let r = self.paras[p.para].clone();
-        let para = self.paragraph_mut(p.para);
+        let para = self.paragraph(p.para);
         let after_heading = p.offset == para.len() && matches!(para.style.role, Role::Heading(_));
+        let body = after_heading.then(|| self.body_style());
+        let para = self.paragraph_mut(p.para);
         let mut tail = para.split_off(p.offset);
         if let Some((flow, idx)) = self.doc.flow_mut(&r) {
             if after_heading {
-                tail.style.role = Role::Body;
-                // Continue in the style of the body text below the heading.
+                // Continue as Normal text, with the paragraph formatting of
+                // the body text below when there is some.
+                tail.runs = vec![TextRun { text: String::new(), style: body.clone().unwrap_or_default() }];
+                tail.style = document::ParagraphStyle::default();
                 if let Some(Block::Paragraph(next)) = flow.get(idx + 1)
                     && next.style.role == Role::Body
                 {
-                    tail.runs = vec![TextRun { text: String::new(), style: next.runs[0].style.clone() }];
+                    // Take its indents and spacing, but not list/tab structure.
                     tail.style = next.style.clone();
                     tail.style.space_before = 0.0;
+                    tail.style.list = None;
+                    tail.style.tab_stops.clear();
+                    if let Some(l) = &next.style.list {
+                        // A list item's text starts at the indent; body text
+                        // starts where its marker was.
+                        tail.style.indent_left = (tail.style.indent_left + l.marker_offset).max(0.0);
+                    }
                 }
             }
             flow.insert(idx + 1, Block::Paragraph(tail));
@@ -219,27 +231,5 @@ impl Editor {
                 self.paragraph_mut(i).delete(from..to);
             }
         }
-    }
-
-    /// Toggles a character style over the selection (Cmd+B / I / U).
-    pub fn toggle_style(&mut self, get: fn(&TextStyle) -> bool, set: fn(&mut TextStyle, bool)) {
-        if self.sel.is_collapsed() {
-            return;
-        }
-        let (a, b) = self.sel.ordered();
-        let all_on = (a.para..=b.para).all(|i| {
-            let p = self.paragraph(i);
-            let from = if i == a.para { a.offset } else { 0 };
-            let to = if i == b.para { b.offset } else { p.len() };
-            p.slice(from..to).iter().all(|r| get(&r.style))
-        });
-        self.checkpoint(EditKind::Other);
-        for i in a.para..=b.para {
-            let len = self.paragraph(i).len();
-            let from = if i == a.para { a.offset } else { 0 };
-            let to = if i == b.para { b.offset } else { len };
-            self.paragraph_mut(i).restyle(from..to, |s| set(s, !all_on));
-        }
-        self.refresh();
     }
 }

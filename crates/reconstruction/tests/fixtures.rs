@@ -354,3 +354,33 @@ fn overlapping_text_is_kept_in_an_absolute_frame() {
         blocks.iter().filter_map(|b| if let Block::Paragraph(p) = b { Some(p.text()) } else { None }).collect();
     assert!(flow_texts.iter().all(|t| !t.contains("DRAFT")), "{outline}");
 }
+
+#[test]
+fn empty_ruled_grid_is_an_editable_table() {
+    let (mut b, regular, _) = page();
+    b.text(72.0, 100.0, 11.0, regular, "Above the table");
+    // 2 rows x 3 columns of ruling, only one cell has text.
+    for y in [120.0, 140.0, 160.0] {
+        b.hrule(72.0, 372.0, y, 0.75);
+    }
+    for x in [72.0, 172.0, 272.0, 372.0] {
+        b.vrule(x, 120.0, 160.0, 0.75);
+    }
+    b.text(177.0, 134.0, 11.0, regular, "Only");
+    b.text(72.0, 190.0, 11.0, regular, "Below the table");
+    let doc = reconstruct(&b.build());
+    let blocks = &section(&doc).blocks;
+    let outline = doc.outline();
+    let Some(Block::Table(t)) = blocks.iter().find(|b| matches!(b, Block::Table(_))) else { panic!("no table:\n{outline}") };
+    assert_eq!((t.rows.len(), t.col_widths.len()), (2, 3), "{outline}");
+    assert!(t.borders.is_some());
+    let cell_text = |r: usize, c: usize| match &t.rows[r].cells[c].blocks[..] {
+        [Block::Paragraph(p)] => p.text(),
+        other => panic!("cell {r},{c}: {other:?}"),
+    };
+    assert_eq!(cell_text(0, 1), "Only");
+    assert_eq!(cell_text(1, 2), "", "empty cells keep an editable paragraph");
+    let order: Vec<&str> = blocks.iter().map(|b| match b { Block::Paragraph(_) => "P", Block::Table(_) => "T", _ => "?" }).collect();
+    assert_eq!(order, ["P", "T", "P"], "{outline}");
+    assert_eq!(section(&doc).decorations.len(), 0, "rules consumed by the table");
+}

@@ -92,6 +92,34 @@ impl PdfSource {
         Ok(bitmap.as_image().map_err(|e| e.to_string())?.to_rgba8())
     }
 
+    /// Bytes of the attachment called `name`, if the PDF embeds one.
+    pub fn attachment(&self, name: &str) -> Option<Vec<u8>> {
+        self.doc.attachments().iter().find(|a| a.name() == name).and_then(|a| a.save_to_bytes().ok())
+    }
+
+    /// Stable hash (FNV-1a) of every page's text as extracted, whitespace
+    /// excluded. Identical for a PDF and any byte-identical copy; changes
+    /// when another program edits the text.
+    pub fn text_fingerprint(&self) -> Result<u64, String> {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for i in 0..self.page_count() {
+            let page = self.page(i)?;
+            let text = page.text().map_err(|e| e.to_string())?;
+            for c in text.chars().iter() {
+                let Some(ch) = c.unicode_char() else { continue };
+                if ch.is_whitespace() || c.is_generated().unwrap_or(false) {
+                    continue;
+                }
+                let mut buf = [0u8; 4];
+                for b in ch.encode_utf8(&mut buf).bytes() {
+                    h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+            h = (h ^ 0xff).wrapping_mul(0x0100_0000_01b3);
+        }
+        Ok(h)
+    }
+
     /// A PNG crop of the rendered page (used to preserve content that
     /// cannot be reconstructed, such as rotated text).
     pub fn render_crop(&self, index: u32, rect: Rect, scale: f32) -> Result<(Vec<u8>, u32, u32), String> {
