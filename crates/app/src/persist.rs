@@ -1,4 +1,4 @@
-//! PDFs saved by Reflow carry their editable document as an embedded
+//! PDFs saved by Revise carry their editable document as an embedded
 //! attachment (a "hybrid PDF"), so reopening restores tables, lists and
 //! styles exactly instead of reconstructing them. The attachment records a
 //! fingerprint of the PDF's text; if another program edits the PDF, the
@@ -11,12 +11,19 @@ use pdf_source::PdfSource;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-const ATTACHMENT: &str = "reflow-document.json";
+const ATTACHMENT: &str = "revise-document.json";
+/// Attachment name used before the app was renamed from Reflow.
+const LEGACY_ATTACHMENT: &str = "reflow-document.json";
 
-/// `~/Library/Application Support/Reflow/<sub>` (created on demand).
+/// `~/Library/Application Support/Revise/<sub>` (created on demand; data
+/// from before the rename is moved over from `.../Reflow`).
 fn support_dir(sub: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    let dir = PathBuf::from(home).join("Library/Application Support/Reflow").join(sub);
+    let root = PathBuf::from(home).join("Library/Application Support");
+    if !root.join("Revise").exists() && root.join("Reflow").exists() {
+        let _ = std::fs::rename(root.join("Reflow"), root.join("Revise"));
+    }
+    let dir = root.join("Revise").join(sub);
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -31,7 +38,7 @@ fn key(path: &Path) -> String {
     format!("{h:016x}")
 }
 
-/// Where the untouched original of `path` is kept once Reflow overwrites it.
+/// Where the untouched original of `path` is kept once Revise overwrites it.
 pub fn original_backup(path: &Path) -> Option<PathBuf> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     Some(support_dir("Originals")?.join(format!("{}-{name}", key(path))))
@@ -42,7 +49,7 @@ pub fn has_original_backup(path: &Path) -> bool {
 }
 
 /// Before the first overwrite of an existing file, keep a copy of it. Later
-/// saves leave that copy alone, so it is always the pre-Reflow version.
+/// saves leave that copy alone, so it is always the pre-Revise version.
 pub fn ensure_original_backup(path: &Path) -> std::io::Result<()> {
     let Some(backup) = original_backup(path) else { return Ok(()) };
     if path.exists() && !backup.exists() {
@@ -99,7 +106,7 @@ pub fn pdf_bytes(doc: &Document, layout: &DocLayout) -> Result<Vec<u8>, String> 
 
 /// The embedded editable document, if present and still matching the PDF.
 pub fn embedded_document(source: &PdfSource) -> Option<Document> {
-    let (doc, fingerprint) = Document::from_bytes(&source.attachment(ATTACHMENT)?).ok()?;
+    let (doc, fingerprint) = Document::from_bytes(&source.attachment(ATTACHMENT).or_else(|| source.attachment(LEGACY_ATTACHMENT))?).ok()?;
     let matches = fingerprint? == source.text_fingerprint().ok()? && doc.sections.len() == source.page_count() as usize;
     matches.then_some(doc)
 }
@@ -119,7 +126,7 @@ mod tests {
     /// Backups and autosaves live under $HOME; point it at a temp dir.
     #[test]
     fn original_backup_and_autosave_lifecycle() {
-        let home = std::env::temp_dir().join(format!("reflow-home-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("revise-home-{}", std::process::id()));
         std::fs::create_dir_all(&home).unwrap();
         // SAFETY: only this test reads HOME in this process's persist code paths.
         unsafe { std::env::set_var("HOME", &home) };
@@ -157,6 +164,16 @@ mod tests {
         let saved = PdfSource::from_bytes(pdf_bytes(&e.doc, &layout).unwrap()).unwrap();
         let restored = embedded_document(&saved).expect("embedded document restored");
         assert_eq!(restored.outline(), e.doc.outline());
+    }
+
+    #[test]
+    fn pdfs_saved_under_the_old_name_still_restore() {
+        let Some(doc) = fixture_doc() else { return };
+        let layout = layout::Layouter::new().layout(&doc);
+        let fingerprint = PdfSource::from_bytes(export::export_pdf(&layout).unwrap()).unwrap().text_fingerprint().unwrap();
+        let json = String::from_utf8(doc.to_bytes(Some(fingerprint)).unwrap()).unwrap().replacen(r#""format":"revise""#, r#""format":"reflow""#, 1);
+        let legacy = export::export_pdf_with_attachment(&layout, Some((LEGACY_ATTACHMENT, json.as_bytes()))).unwrap();
+        assert!(embedded_document(&PdfSource::from_bytes(legacy).unwrap()).is_some());
     }
 
     #[test]

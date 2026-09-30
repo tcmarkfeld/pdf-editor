@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "reflow"
+name = "revise"
 path = "src/main.rs"
 
 [dependencies]

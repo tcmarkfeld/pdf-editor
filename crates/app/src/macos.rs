@@ -46,7 +46,7 @@ extern "C-unwind" fn handle_open(_this: *mut AnyObject, _cmd: Sel, event: *mut A
                 paths.push(PathBuf::from(CStr::from_ptr(utf8).to_string_lossy().into_owned()));
             }
         }
-        if std::env::var_os("REFLOW_TRACE").is_some() {
+        if std::env::var_os("REVISE_TRACE").is_some() {
             eprintln!("open documents event: {paths:?}");
         }
         if let Ok(mut q) = OPENED.lock() {
@@ -61,7 +61,7 @@ extern "C-unwind" fn handle_open(_this: *mut AnyObject, _cmd: Sel, event: *mut A
 extern "C-unwind" fn will_finish_launching(this: *mut AnyObject, _cmd: Sel, _note: *mut AnyObject) {
     // SAFETY: `this` is our handler instance; the selector matches
     // `handleOpen:withReply:` (v@:@@) registered on its class.
-    if std::env::var_os("REFLOW_TRACE").is_some() {
+    if std::env::var_os("REVISE_TRACE").is_some() {
         eprintln!("will finish launching: installing open-documents handler");
     }
     unsafe {
@@ -77,7 +77,7 @@ extern "C-unwind" fn will_finish_launching(this: *mut AnyObject, _cmd: Sel, _not
 }
 
 fn handler_class() -> Option<&'static AnyClass> {
-    let mut builder = ClassBuilder::new(c"ReflowOpenDocumentsHandler", class!(NSObject))?;
+    let mut builder = ClassBuilder::new(c"ReviseOpenDocumentsHandler", class!(NSObject))?;
     // SAFETY: both functions match their selectors' type encodings
     // (v@:@@ and v@:@).
     unsafe {

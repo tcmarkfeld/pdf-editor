@@ -7,11 +7,11 @@ use std::time::Instant;
 use document::Document;
 
 const USAGE: &str = "usage:
-  reflow [file.pdf|file.reflow]            open the editor
-  reflow outline <in.pdf|in.reflow>        print the reconstructed structure
-  reflow convert <in.pdf> <out.reflow>     reconstruct and save the editable document
-  reflow export <in.pdf|in.reflow> <out.pdf>
-  reflow compare <in.pdf> <out-dir> [scale]  original / reconstructed / diff PNGs";
+  revise [file.pdf|file.revise]            open the editor
+  revise outline <in.pdf|in.revise>        print the reconstructed structure
+  revise convert <in.pdf> <out.revise>     reconstruct and save the editable document
+  revise export <in.pdf|in.revise> <out.pdf>
+  revise compare <in.pdf> <out-dir> [scale]  original / reconstructed / diff PNGs";
 
 pub fn run(args: &[String]) -> Option<i32> {
     let cmd = args.first()?.as_str();
@@ -42,13 +42,13 @@ pub fn run(args: &[String]) -> Option<i32> {
 
 fn load(input: &str) -> Result<Document, String> {
     let path = Path::new(input);
-    if path.extension().is_some_and(|e| e == "reflow") {
+    if path.extension().is_some_and(|e| e == "revise" || e == "reflow") {
         return Document::load(path).map_err(|e| e.to_string());
     }
     let start = Instant::now();
     let src = pdf_source::PdfSource::open(path)?;
     if let Some(doc) = crate::persist::embedded_document(&src) {
-        eprintln!("restored the editable document embedded by Reflow");
+        eprintln!("restored the editable document embedded by Revise");
         return Ok(doc);
     }
     let mut sections = Vec::new();

@@ -34,20 +34,21 @@ struct SavedDocument {
 impl Document {
     /// Serialized editable document, optionally tied to a PDF fingerprint.
     pub fn to_bytes(&self, fingerprint: Option<u64>) -> io::Result<Vec<u8>> {
-        let saved = SavedDocument { format: "reflow".into(), version: FORMAT_VERSION, fingerprint, document: self.clone() };
+        let saved = SavedDocument { format: "revise".into(), version: FORMAT_VERSION, fingerprint, document: self.clone() };
         serde_json::to_vec(&saved).map_err(io::Error::other)
     }
 
     pub fn from_bytes(bytes: &[u8]) -> io::Result<(Document, Option<u64>)> {
         let saved: SavedDocument = serde_json::from_slice(bytes).map_err(io::Error::other)?;
-        if saved.format != "reflow" || saved.version > FORMAT_VERSION {
+        // "reflow" is the format name from before the app was renamed.
+        if !matches!(saved.format.as_str(), "revise" | "reflow") || saved.version > FORMAT_VERSION {
             return Err(io::Error::other(format!("unsupported document format {} v{}", saved.format, saved.version)));
         }
         Ok((saved.document, saved.fingerprint))
     }
 
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let tmp = path.with_extension("reflow.tmp");
+        let tmp = path.with_extension("revise.tmp");
         std::fs::write(&tmp, self.to_bytes(None)?)?;
         std::fs::rename(tmp, path)
     }

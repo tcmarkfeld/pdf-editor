@@ -1,13 +1,13 @@
 # Architecture
 
-Reflow opens a PDF, reconstructs it into an editable document model with
+Revise opens a PDF, reconstructs it into an editable document model with
 deterministic geometry/typography heuristics, and from then on treats the
 model — not the PDF — as the source of truth. Layout, editing, rendering and
 export all read the model.
 
 ```
             ┌────────────┐   SourcePage    ┌────────────────┐   Section    ┌──────────┐
- file.pdf ─►│ pdf_source │───────────────►│ reconstruction │─────────────►│ document │◄── .reflow (JSON)
+ file.pdf ─►│ pdf_source │───────────────►│ reconstruction │─────────────►│ document │◄── .revise (JSON)
             └────────────┘ (glyphs, fonts, └────────────────┘              └────┬─────┘
              PDFium          paths, images,                                     │ edits (editor)
              reference       links)                                             ▼
@@ -108,7 +108,7 @@ request through a fixed candidate list: installed family → metric-compatible
 alias (Calibri→Carlito, Arial→Liberation Sans/Arimo, …) → generic class
 (serif/sans/mono from PDF flags and name) → system fallback. Parley then
 does per-cluster fallback for characters the family lacks. Every non-exact
-resolution is listed in the debug panel and by `reflow compare`.
+resolution is listed in the debug panel and by `revise compare`.
 
 ## Confidence and fallbacks
 
@@ -129,9 +129,9 @@ than corrupted:
   opacity, difference overlay (red: original only, blue: reconstruction
   only, with per-page % scores), and boxes for glyphs, words, lines, blocks
   and zones; font substitution list; reconstruction notes.
-* CLI: `reflow outline`, `reflow compare <pdf> <dir>` (original /
-  reconstructed / diff PNGs + scores), `reflow convert`, `reflow export`.
-* `REFLOW_SCREENSHOT=out.png REFLOW_EXIT=1 [REFLOW_SCRIPT='click:0:100:200;type:x;key:Enter']`
+* CLI: `revise outline`, `revise compare <pdf> <dir>` (original /
+  reconstructed / diff PNGs + scores), `revise convert`, `revise export`.
+* `REVISE_SCREENSHOT=out.png REVISE_EXIT=1 [REVISE_SCRIPT='click:0:100:200;type:x;key:Enter']`
   captures the window after scripted input (`scripts/shot.sh`).
 
 ## Known limitations

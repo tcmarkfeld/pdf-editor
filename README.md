@@ -1,4 +1,4 @@
-# Reflow
+# Revise
 
 A native desktop editor that opens a PDF and turns it into an editable,
 reflowing document — paragraphs, lists, tab-aligned rows, columns, tables —
@@ -22,9 +22,9 @@ cargo run --release -- fixtures/pdf/resume-single.pdf
 scripts/package-macos.sh --install
 ```
 
-This builds and installs `/Applications/Reflow.app`, registered so Finder's
+This builds and installs `/Applications/Revise.app`, registered so Finder's
 *Open With* lists it for PDFs .
-`--dmg` additionally produces `dist/Reflow.dmg` for copying elsewhere. The app is self-contained: PDFium
+`--dmg` additionally produces `dist/Revise.dmg` for copying elsewhere. The app is self-contained: PDFium
 is bundled in `Contents/Frameworks`. It is signed ad-hoc, which is enough
 for your own Mac; to give it to others, sign with a Developer ID certificate
 and notarize (`codesign --options runtime --sign "Developer ID Application: …"`
@@ -58,7 +58,7 @@ formatting. With nothing selected, formatting applies to what you type next.
 
 - **Your files are protected.** Closing, quitting or opening another file with
   unsaved changes asks first. Before the first save over a PDF, the untouched
-  original is kept in `~/Library/Application Support/Reflow/Originals`;
+  original is kept in `~/Library/Application Support/Revise/Originals`;
   *File → Revert to Original…* restores it. Unsaved edits are autosaved every
   15 seconds and offered for recovery after a crash.
 - **Find & replace**: ⌘F / ⌥⌘F, ⌘G / ⇧⌘G for next/previous, with a match-case option.
@@ -83,7 +83,7 @@ cargo run -- outline fixtures/pdf/resume-two-column.pdf
 cargo run -- compare fixtures/pdf/resume-single.pdf /tmp/cmp
 ```
 
-`convert <in.pdf> <out.reflow>` and `export <in> <out.pdf>` are also
+`convert <in.pdf> <out.revise>` and `export <in> <out.pdf>` are also
 available.
 
 ## Tests

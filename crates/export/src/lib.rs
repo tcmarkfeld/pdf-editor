@@ -28,7 +28,7 @@ pub fn export_pdf_with_attachment(layout: &DocLayout, attachment: Option<(&str, 
         let file = krilla::embed::EmbeddedFile {
             path: name.to_string(),
             mime_type: krilla::embed::MimeType::new("application/json"),
-            description: Some("Editable document (Reflow)".into()),
+            description: Some("Editable document (Revise)".into()),
             association_kind: krilla::embed::AssociationKind::Source,
             data: Data::from(bytes.to_vec()),
             modification_date: None,

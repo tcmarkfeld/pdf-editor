@@ -14,9 +14,9 @@ fn save_and_load_round_trip() {
         ..Default::default()
     };
     let doc = Document { sections: vec![Arc::new(section)] };
-    let dir = std::env::temp_dir().join(format!("reflow-test-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("revise-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("doc.reflow");
+    let path = dir.join("doc.revise");
     doc.save(&path).unwrap();
     let loaded = Document::load(&path).unwrap();
     assert_eq!(loaded.outline(), doc.outline());

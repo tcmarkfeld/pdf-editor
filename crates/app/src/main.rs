@@ -31,23 +31,23 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 900.0])
             .with_min_inner_size([760.0, 480.0])
-            .with_title("Reflow")
+            .with_title("Revise")
             // Unified title bar: content runs under the traffic lights.
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false),
         ..Default::default()
     };
-    eframe::run_native("Reflow", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, file)))))
+    eframe::run_native("Revise", options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, file)))))
 }
 
-/// Writes panics (with a backtrace) to ~/Library/Logs/Reflow so crashes seen
+/// Writes panics (with a backtrace) to ~/Library/Logs/Revise so crashes seen
 /// in normal use can be diagnosed.
 fn install_crash_log() {
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         if let Some(home) = std::env::var_os("HOME") {
-            let dir = PathBuf::from(home).join("Library/Logs/Reflow");
+            let dir = PathBuf::from(home).join("Library/Logs/Revise");
             let _ = std::fs::create_dir_all(&dir);
             let bt = std::backtrace::Backtrace::force_capture();
             let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());

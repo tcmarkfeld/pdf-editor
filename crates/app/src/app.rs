@@ -78,7 +78,7 @@ pub struct App {
     /// A PDF whose worker has not reported its page list yet.
     opening: Option<Worker>,
     /// The PDF this window saves to (None for documents opened from a
-    /// legacy `.reflow` file: Save then asks where to write the PDF).
+    /// legacy `.revise`/`.reflow` file: Save then asks where to write the PDF).
     pdf_path: Option<PathBuf>,
     /// Name shown in the title bar.
     title: String,
@@ -121,7 +121,7 @@ impl App {
             autosaved: (0, 0.0),
             saved_revision: 0,
             status: String::new(),
-            show_debug: std::env::var_os("REFLOW_DEBUG").is_some(),
+            show_debug: std::env::var_os("REVISE_DEBUG").is_some(),
             toolbar: Default::default(),
             find: Default::default(),
             page_setup: Default::default(),
@@ -162,7 +162,7 @@ impl App {
             }
             Pending::Open(path) => self.open_now(ctx, path),
             Pending::OpenDialog => {
-                if let Some(path) = rfd::FileDialog::new().add_filter("Documents", &["pdf", "reflow"]).pick_file() {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Documents", &["pdf", "revise", "reflow"]).pick_file() {
                     self.open_now(ctx, path);
                 }
             }
@@ -182,11 +182,12 @@ impl App {
     }
 
     fn open_now(&mut self, ctx: &egui::Context, path: PathBuf) {
+        eprintln!("TMP open_now {}", path.display());
         if let Some(old) = &self.pdf_path {
             crate::persist::clear_autosave(old);
         }
         self.recovery = if self.capture.is_none() { crate::persist::read_autosave(&path) } else { None };
-        if path.extension().is_some_and(|e| e == "reflow") {
+        if path.extension().is_some_and(|e| e == "revise" || e == "reflow") {
             match Document::load(&path) {
                 Ok(doc) => {
                     self.doc = Some(DocView::new(Editor::new(doc), None));
@@ -226,11 +227,13 @@ impl App {
                         let worker = self.opening.take().expect("opening worker");
                         self.doc = Some(DocView::new(Editor::new(Document { sections }), Some(worker)));
                         self.saved_revision = 0;
+                        eprintln!("TMP opened {} pages", page_sizes.len());
                         self.status = format!("{} pages — reconstructing…", page_sizes.len());
                         carried.extend(responses);
                         break;
                     }
                     Response::Failed(e) => {
+                        eprintln!("TMP failed {e}");
                         self.status = e;
                         self.opening = None;
                         break;
@@ -260,7 +263,7 @@ impl App {
                     self.status = if done == total { format!("{total} pages reconstructed") } else { format!("Reconstructing {done}/{total}…") };
                 }
                 Response::Restored(doc) => {
-                    // A PDF saved by Reflow: install its exact editable document.
+                    // A PDF saved by Revise: install its exact editable document.
                     let clean = view.editor.revision == self.saved_revision;
                     for (i, section) in doc.sections.into_iter().enumerate() {
                         view.editor.replace_section(i, section);
@@ -349,7 +352,7 @@ impl App {
                 if self.pdf_path.as_deref().is_some_and(crate::persist::has_original_backup) {
                     self.request(ctx, Pending::Revert);
                 } else {
-                    self.notice = Some(("Nothing to revert — Reflow hasn’t overwritten this file".into(), now()));
+                    self.notice = Some(("Nothing to revert — Revise hasn’t overwritten this file".into(), now()));
                 }
                 return;
             }
@@ -558,7 +561,7 @@ impl App {
             ui.label(RichText::new("Edit any PDF like a document").size(24.0).strong().color(p.text));
             ui.add_space(6.0);
             ui.label(
-                RichText::new("Reflow rebuilds your PDF into real paragraphs, lists and tables,\nso text wraps and moves as you type.")
+                RichText::new("Revise rebuilds your PDF into real paragraphs, lists and tables,\nso text wraps and moves as you type.")
                     .size(14.0)
                     .color(p.text_muted),
             );
@@ -585,6 +588,11 @@ impl App {
             let target = rect.shrink(24.0);
             painter.rect_stroke(target, 16.0, Stroke::new(2.0, p.accent), egui::StrokeKind::Inside);
             painter.text(target.center(), Align2::CENTER_CENTER, "Drop to open", FontId::proportional(22.0), p.accent);
+        }
+        if std::env::var_os("REVISE_TRACE").is_some() {
+            ctx.input(|i| if !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty() {
+                eprintln!("drag: hovered {:?} dropped {:?}", i.raw.hovered_files.len(), i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect::<Vec<_>>());
+            });
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).find(|p| !p.as_os_str().is_empty()));
         if let Some(path) = dropped {
@@ -689,7 +697,7 @@ impl App {
             let (title, body) = if action == Pending::Revert {
                 (
                     format!("Revert “{name}” to the original PDF?"),
-                    "The file will be replaced by the version from before Reflow first saved it. All changes since will be lost.".to_string(),
+                    "The file will be replaced by the version from before Revise first saved it. All changes since will be lost.".to_string(),
                 )
             } else {
                 (format!("Do you want to save the changes to “{name}”?"), "Your changes will be lost if you don’t save them.".to_string())
@@ -759,7 +767,7 @@ impl App {
                 ui.set_width(380.0);
                 ui.label(RichText::new(format!("Recover unsaved changes to “{name}”?")).size(15.0).strong());
                 ui.add_space(6.0);
-                ui.label(RichText::new(format!("Reflow closed before these edits were saved. They were autosaved {ago}.")).size(13.0).color(p.text_muted));
+                ui.label(RichText::new(format!("Revise closed before these edits were saved. They were autosaved {ago}.")).size(13.0).color(p.text_muted));
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     if ui.button("Discard").clicked() {

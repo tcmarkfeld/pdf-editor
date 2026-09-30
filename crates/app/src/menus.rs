@@ -31,19 +31,19 @@ impl NativeMenu {
         let sep = PredefinedMenuItem::separator;
 
         let app = Submenu::with_items(
-            "Reflow",
+            "Revise",
             true,
             &[
                 &PredefinedMenuItem::about(
-                    Some("About Reflow"),
-                    Some(AboutMetadata { name: Some("Reflow".into()), version: Some(env!("CARGO_PKG_VERSION").into()), ..Default::default() }),
+                    Some("About Revise"),
+                    Some(AboutMetadata { name: Some("Revise".into()), version: Some(env!("CARGO_PKG_VERSION").into()), ..Default::default() }),
                 ),
                 &sep(),
                 &PredefinedMenuItem::hide(None),
                 &PredefinedMenuItem::hide_others(None),
                 &PredefinedMenuItem::show_all(None),
                 &sep(),
-                &item("Quit Reflow", Command::Quit, Some((CMD, Code::KeyQ))),
+                &item("Quit Revise", Command::Quit, Some((CMD, Code::KeyQ))),
             ],
         )
         .expect("app menu");

@@ -20,7 +20,7 @@ pub enum Response {
     Opened { page_sizes: Vec<(f32, f32)> },
     Rendered { page: u32, scale: f32, image: RgbaImage },
     Reconstructed { index: u32, section: document::Section, analysis: Box<PageAnalysis> },
-    /// The PDF carries its own editable document (saved by Reflow).
+    /// The PDF carries its own editable document (saved by Revise).
     Restored(document::Document),
     Failed(String),
 }

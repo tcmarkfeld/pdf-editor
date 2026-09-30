@@ -168,7 +168,7 @@ impl DocView {
         self.originals.insert(page, Bitmap { scale, texture, pixels });
     }
 
-    /// Development scripting (`REFLOW_SCRIPT`): `click:page:x:y` (page
+    /// Development scripting (`REVISE_SCRIPT`): `click:page:x:y` (page
     /// points), `shiftclick:page:x:y`, `type:text`, `key:Name[+shift|+alt|+cmd]`,
     /// `overlay:original|diff|lines|blocks|zones`, `zoom:factor`.
     pub fn script_step(&mut self, ctx: &egui::Context, step: &str) {
@@ -234,7 +234,7 @@ impl DocView {
             }
             _ => {}
         }
-        if std::env::var_os("REFLOW_TRACE").is_some() {
+        if std::env::var_os("REVISE_TRACE").is_some() {
             eprintln!("step {step:?}: sel {:?} paras {}", self.editor.sel, self.editor.para_count());
         }
         self.relayout();

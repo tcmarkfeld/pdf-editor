@@ -1,5 +1,5 @@
 /target
 /vendor/pdfium
 .DS_Store
-*.reflow.tmp
+*.revise.tmp
 /dist

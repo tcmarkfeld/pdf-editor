@@ -1,5 +1,5 @@
-//! Development aid: `REFLOW_SCREENSHOT=out.png` saves a window screenshot
-//! once the UI has settled (and `REFLOW_EXIT=1` quits afterwards), so GUI
+//! Development aid: `REVISE_SCREENSHOT=out.png` saves a window screenshot
+//! once the UI has settled (and `REVISE_EXIT=1` quits afterwards), so GUI
 //! changes can be verified without screen-recording permissions.
 
 use std::path::PathBuf;
@@ -14,17 +14,17 @@ pub struct Capture {
 
 impl Capture {
     pub fn from_env() -> Option<Capture> {
-        let path = std::env::var_os("REFLOW_SCREENSHOT")?;
+        let path = std::env::var_os("REVISE_SCREENSHOT")?;
         Some(Capture {
             path: path.into(),
-            exit: std::env::var_os("REFLOW_EXIT").is_some(),
+            exit: std::env::var_os("REVISE_EXIT").is_some(),
             settled_frames: 0,
             requested: false,
-            script: std::env::var("REFLOW_SCRIPT").unwrap_or_default().split(';').filter(|s| !s.is_empty()).map(str::to_string).collect(),
+            script: std::env::var("REVISE_SCRIPT").unwrap_or_default().split(';').filter(|s| !s.is_empty()).map(str::to_string).collect(),
         })
     }
 
-    /// Next `REFLOW_SCRIPT` step (steps are `;`-separated, one per frame so
+    /// Next `REVISE_SCRIPT` step (steps are `;`-separated, one per frame so
     /// every intermediate state is painted, as with real input).
     pub fn next_step(&mut self) -> Option<String> {
         self.script.pop_front()
