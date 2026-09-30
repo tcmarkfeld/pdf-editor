@@ -182,7 +182,6 @@ impl App {
     }
 
     fn open_now(&mut self, ctx: &egui::Context, path: PathBuf) {
-        eprintln!("TMP open_now {}", path.display());
         if let Some(old) = &self.pdf_path {
             crate::persist::clear_autosave(old);
         }
@@ -227,13 +226,11 @@ impl App {
                         let worker = self.opening.take().expect("opening worker");
                         self.doc = Some(DocView::new(Editor::new(Document { sections }), Some(worker)));
                         self.saved_revision = 0;
-                        eprintln!("TMP opened {} pages", page_sizes.len());
                         self.status = format!("{} pages — reconstructing…", page_sizes.len());
                         carried.extend(responses);
                         break;
                     }
                     Response::Failed(e) => {
-                        eprintln!("TMP failed {e}");
                         self.status = e;
                         self.opening = None;
                         break;
@@ -588,11 +585,6 @@ impl App {
             let target = rect.shrink(24.0);
             painter.rect_stroke(target, 16.0, Stroke::new(2.0, p.accent), egui::StrokeKind::Inside);
             painter.text(target.center(), Align2::CENTER_CENTER, "Drop to open", FontId::proportional(22.0), p.accent);
-        }
-        if std::env::var_os("REVISE_TRACE").is_some() {
-            ctx.input(|i| if !i.raw.hovered_files.is_empty() || !i.raw.dropped_files.is_empty() {
-                eprintln!("drag: hovered {:?} dropped {:?}", i.raw.hovered_files.len(), i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect::<Vec<_>>());
-            });
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).find(|p| !p.as_os_str().is_empty()));
         if let Some(path) = dropped {
