@@ -7,7 +7,7 @@ use fonts::FontSystem;
 use parley::LayoutContext;
 
 use crate::para::{self, Shaped};
-use crate::{Item, PageLayout, ParaLayout, Part, RunIndex, SectionLayout, VisualLine};
+use crate::{Item, ObjectGeom, PageLayout, ParaLayout, Part, RunIndex, SectionLayout, TableGeom, VisualLine};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pos {
@@ -40,10 +40,33 @@ struct Ctx<'a> {
     lcx: &'a mut LayoutContext<RunIndex>,
     /// List counters per list id, one slot per level.
     counters: HashMap<u32, Vec<Option<u32>>>,
+    /// Path of the block being laid out (see `document::ParaRef`).
+    path: Vec<u32>,
+    objects: Vec<ObjectGeom>,
+    tables: Vec<TableGeom>,
 }
 
-pub fn layout_section(section: &Section, si: usize, fonts: &mut FontSystem, lcx: &mut LayoutContext<RunIndex>) -> SectionLayout {
-    let mut ctx = Ctx { section, si, pages: Vec::new(), paras: Vec::new(), fonts, lcx, counters: HashMap::new() };
+/// `start_y`: where content begins on the first page when the previous
+/// section's overflow already occupies its top.
+pub fn layout_section(
+    section: &Section,
+    si: usize,
+    start_y: Option<f32>,
+    fonts: &mut FontSystem,
+    lcx: &mut LayoutContext<RunIndex>,
+) -> SectionLayout {
+    let mut ctx = Ctx {
+        section,
+        si,
+        pages: Vec::new(),
+        paras: Vec::new(),
+        fonts,
+        lcx,
+        counters: HashMap::new(),
+        path: Vec::new(),
+        objects: Vec::new(),
+        tables: Vec::new(),
+    };
     ctx.new_page(false);
     for d in &section.decorations {
         let item = match d {
@@ -52,6 +75,7 @@ pub fn layout_section(section: &Section, si: usize, fonts: &mut FontSystem, lcx:
         };
         ctx.pages[0].items.push(item);
     }
+    ctx.pages[0].decorations = ctx.pages[0].items.len();
     let m = section.margins;
     let size = section.page_size;
     let area = Area {
@@ -61,14 +85,15 @@ pub fn layout_section(section: &Section, si: usize, fonts: &mut FontSystem, lcx:
         bottom: (size.h - m.bottom).max(m.top + 1.0),
         paginate: true,
     };
-    let mut pos = Pos { page: 0, y: m.top };
+    let mut pos = Pos { page: 0, y: start_y.map_or(m.top, |y| y.max(m.top)) };
     ctx.blocks(&section.blocks, area, &mut pos);
-    SectionLayout { pages: ctx.pages, paras: ctx.paras }
+    let end = (pos.page, pos.y);
+    SectionLayout { pages: ctx.pages, paras: ctx.paras, objects: ctx.objects, tables: ctx.tables, end }
 }
 
 impl Ctx<'_> {
     fn new_page(&mut self, continuation: bool) -> usize {
-        self.pages.push(PageLayout { section: self.si, size: self.section.page_size, items: Vec::new(), continuation });
+        self.pages.push(PageLayout { section: self.si, decorations: 0, size: self.section.page_size, items: Vec::new(), continuation });
         self.pages.len() - 1
     }
 
@@ -85,7 +110,8 @@ impl Ctx<'_> {
     }
 
     fn blocks(&mut self, blocks: &[Block], area: Area, pos: &mut Pos) {
-        for b in blocks {
+        for (bi, b) in blocks.iter().enumerate() {
+            self.path.push(bi as u32);
             match b {
                 Block::Paragraph(p) => self.paragraph(p, area, pos),
                 Block::Rule(r) => {
@@ -101,75 +127,106 @@ impl Ctx<'_> {
                     self.ensure(area, pos, img.height);
                     let rect = Rect::from_xywh(area.x + img.x, pos.y, img.width, img.height);
                     self.pages[pos.page].items.push(Item::Image { rect, image: img.image.clone() });
+                    self.objects.push(ObjectGeom { page: pos.page, rect, path: self.path.clone() });
                     pos.y += img.height;
                 }
                 Block::Columns(c) => {
                     pos.y += c.space_before;
                     let start = *pos;
                     let mut end = start;
-                    for col in &c.columns {
+                    for (ci, col) in c.columns.iter().enumerate() {
                         let mut p = start;
+                        self.path.push(ci as u32);
                         self.blocks(&col.blocks, Area { x: area.x + col.x, w: col.width, ..area }, &mut p);
+                        self.path.pop();
                         end = end.max(p);
                     }
                     *pos = end;
                 }
-                Block::Table(t) => {
-                    pos.y += t.space_before;
-                    let x0 = area.x + t.x;
-                    for row in &t.rows {
-                        self.ensure(area, pos, row.min_height);
-                        let start = *pos;
-                        let mut end = Pos { page: start.page, y: start.y + row.min_height };
-                        let shade_at = self.pages[start.page].items.len();
-                        let mut cx = x0;
-                        for (ci, cell) in row.cells.iter().enumerate() {
-                            let w = t.col_widths.get(ci).copied().unwrap_or(0.0);
-                            let mut p = start;
-                            self.blocks(&cell.blocks, Area { x: cx, w, ..area }, &mut p);
-                            end = end.max(p);
-                            cx += w;
-                        }
-                        if end.page == start.page {
-                            // Shading goes beneath the cell content already emitted.
-                            let mut cx = x0;
-                            let mut shades = Vec::new();
-                            for (ci, cell) in row.cells.iter().enumerate() {
-                                let w = t.col_widths.get(ci).copied().unwrap_or(0.0);
-                                if let Some(color) = cell.shading {
-                                    shades.push(Item::Rect { rect: Rect::new(cx, start.y, cx + w, end.y), color });
-                                }
-                                cx += w;
-                            }
-                            let items = &mut self.pages[start.page].items;
-                            items.splice(shade_at..shade_at, shades);
-                        }
-                        if let Some(b) = t.borders
-                            && end.page == start.page
-                        {
-                            let items = &mut self.pages[start.page].items;
-                            let h = b.width * 0.5;
-                            let mut cx = x0;
-                            for w in t.col_widths.iter().copied() {
-                                let r = Rect::new(cx, start.y, cx + w, end.y);
-                                for edge in [
-                                    Rect::new(r.x0 - h, r.y0 - h, r.x1 + h, r.y0 + h),
-                                    Rect::new(r.x0 - h, r.y1 - h, r.x1 + h, r.y1 + h),
-                                    Rect::new(r.x0 - h, r.y0 - h, r.x0 + h, r.y1 + h),
-                                    Rect::new(r.x1 - h, r.y0 - h, r.x1 + h, r.y1 + h),
-                                ] {
-                                    items.push(Item::Rect { rect: edge, color: b.color });
-                                }
-                                cx += w;
-                            }
-                        }
-                        *pos = end;
-                    }
-                }
+                Block::Table(t) => self.table(t, area, pos),
                 Block::Frame(f) => {
                     let mut p = Pos { page: 0, y: f.rect.y0 };
                     let sub = Area { x: f.rect.x0, w: f.rect.width(), top: f.rect.y0, bottom: f32::MAX, paginate: false };
+                    self.path.push(0);
                     self.blocks(&f.blocks, sub, &mut p);
+                    self.path.pop();
+                }
+            }
+            self.path.pop();
+        }
+    }
+
+    /// Rows are laid out in order; a cell spanning rows contributes its
+    /// height to the last row it covers. Shading and borders are drawn once
+    /// every row's extent is known.
+    fn table(&mut self, t: &document::Table, area: Area, pos: &mut Pos) {
+        pos.y += t.space_before;
+        let ncols = t.col_widths.len();
+        let mut xs = vec![area.x + t.x];
+        for w in &t.col_widths {
+            xs.push(xs.last().copied().unwrap_or(0.0) + w);
+        }
+        // (page, top, bottom) per row, and item index for shading per row.
+        let mut rows: Vec<(usize, f32, f32)> = Vec::with_capacity(t.rows.len());
+        let mut shade_at: Vec<usize> = Vec::with_capacity(t.rows.len());
+        // Content end of cells spanning rows, keyed by their last row.
+        let mut span_ends: Vec<(usize, Pos)> = Vec::new();
+        for (ri, row) in t.rows.iter().enumerate() {
+            self.ensure(area, pos, row.min_height);
+            let start = *pos;
+            shade_at.push(self.pages[start.page].items.len());
+            let mut end = Pos { page: start.page, y: start.y + row.min_height };
+            for (ci, cell) in row.cells.iter().enumerate().take(ncols) {
+                if cell.merged {
+                    continue;
+                }
+                let cs = (cell.col_span.max(1) as usize).min(ncols - ci);
+                let rs = (cell.row_span.max(1) as usize).min(t.rows.len() - ri);
+                let mut p = start;
+                self.path.push((ri * ncols + ci) as u32);
+                self.blocks(&cell.blocks, Area { x: xs[ci], w: xs[ci + cs] - xs[ci], ..area }, &mut p);
+                self.path.pop();
+                if rs == 1 { end = end.max(p) } else { span_ends.push((ri + rs - 1, p)) }
+            }
+            for (_, p) in span_ends.iter().filter(|(last, _)| *last == ri) {
+                end = end.max(*p);
+            }
+            rows.push((start.page, start.y, end.y));
+            *pos = end;
+        }
+
+        self.tables.push(TableGeom { path: self.path.clone(), cols: xs.clone(), rows: rows.clone() });
+        for (ri, row) in t.rows.iter().enumerate() {
+            for (ci, cell) in row.cells.iter().enumerate().take(ncols) {
+                if cell.merged {
+                    continue;
+                }
+                let cs = (cell.col_span.max(1) as usize).min(ncols - ci);
+                let rs = (cell.row_span.max(1) as usize).min(t.rows.len() - ri);
+                let (page, top, _) = rows[ri];
+                let (last_page, _, bottom) = rows[ri + rs - 1];
+                if page != last_page {
+                    continue; // split across pages: skip decoration
+                }
+                let r = Rect::new(xs[ci], top, xs[ci + cs], bottom);
+                if let Some(color) = cell.shading {
+                    self.pages[page].items.insert(shade_at[ri], Item::Rect { rect: r, color });
+                    for rj in ri + 1..rows.len() {
+                        if rows[rj].0 == page {
+                            shade_at[rj] += 1;
+                        }
+                    }
+                }
+                if let Some(b) = t.borders {
+                    let h = b.width * 0.5;
+                    for edge in [
+                        Rect::new(r.x0 - h, r.y0 - h, r.x1 + h, r.y0 + h),
+                        Rect::new(r.x0 - h, r.y1 - h, r.x1 + h, r.y1 + h),
+                        Rect::new(r.x0 - h, r.y0 - h, r.x0 + h, r.y1 + h),
+                        Rect::new(r.x1 - h, r.y0 - h, r.x1 + h, r.y1 + h),
+                    ] {
+                        self.pages[page].items.push(Item::Rect { rect: edge, color: b.color });
+                    }
                 }
             }
         }

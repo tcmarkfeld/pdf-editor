@@ -9,10 +9,13 @@
 //! edits copy only the section they touch (`Arc::make_mut`), so history is
 //! cheap even for long documents. Consecutive typing coalesces into one step.
 
+mod find;
 mod format;
+mod objects;
 mod ops;
 mod table;
 
+pub use find::Match;
 pub use format::BlockType;
 pub use table::TableCursor;
 

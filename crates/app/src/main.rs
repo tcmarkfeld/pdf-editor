@@ -1,8 +1,11 @@
 mod app;
 mod capture;
 mod cli;
+mod findbar;
 mod icons;
+mod pagesetup;
 mod persist;
+mod spell;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]

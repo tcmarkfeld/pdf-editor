@@ -251,3 +251,120 @@ fn enter_after_heading_continues_in_body_style() {
     e.enter();
     assert!(!e.paragraph(3).runs[0].style.font.is_bold());
 }
+
+#[test]
+fn find_and_replace() {
+    let mut d = doc(&["Rust is great. rust!", "No match", "RUST"]);
+    if let Block::Paragraph(p) = &mut Arc::make_mut(&mut d.sections[0]).blocks[0] {
+        p.restyle(0..4, |s| s.font.weight = 700);
+    }
+    let mut e = Editor::new(d);
+    assert_eq!(e.find_all("rust", false).len(), 3);
+    let cs = e.find_all("Rust", true);
+    assert_eq!(cs.len(), 1);
+    assert_eq!((cs[0].para, cs[0].range.clone()), (0, 0..4));
+
+    e.replace_match(&cs[0], "Zig");
+    assert_eq!(e.paragraph(0).text(), "Zig is great. rust!");
+    assert!(e.paragraph(0).runs[0].style.font.is_bold(), "replacement keeps the replaced text's style");
+    assert_eq!(e.paragraph(0).runs[0].text, "Zig");
+
+    assert_eq!(e.replace_all("RUST", "Go", false), 2);
+    assert_eq!(e.paragraph(0).text(), "Zig is great. Go!");
+    assert_eq!(e.paragraph(2).text(), "Go");
+    e.undo();
+    assert_eq!(e.paragraph(2).text(), "RUST", "replace all is one undo step");
+    assert!(e.find_all("", false).is_empty());
+    assert_eq!(e.find_all("é", false).len(), 0);
+}
+
+fn png(w: u32, h: u32) -> Arc<document::ImageResource> {
+    Arc::new(document::ImageResource::png(vec![1, 2, 3], w, h))
+}
+
+#[test]
+fn images_insert_resize_and_delete() {
+    let mut e = Editor::new(doc(&["intro", "outro"]));
+    e.set_caret(Pos::new(0, 5));
+    e.insert_image(png(800, 400), 300.0);
+    let blocks = &e.doc.sections[0].blocks;
+    let Block::Image(img) = &blocks[1] else { panic!("image after the paragraph") };
+    assert_eq!((img.width, img.height), (300.0, 150.0), "scaled to fit, aspect kept");
+    let laid = Layouter::new().layout(&e.doc);
+    let (page, rect) = laid.object(0, &[1]).expect("image geometry");
+    assert_eq!(page, 0);
+    assert!(laid.object_at(0, rect.center_x(), rect.center_y()).is_some());
+
+    e.resize_image(0, &[1], 120.0);
+    assert_eq!(e.image_size(0, &[1]), Some((120.0, 60.0)));
+    e.delete_block(0, &[1]);
+    assert!(e.doc.sections[0].blocks.iter().all(|b| !matches!(b, Block::Image(_))));
+    e.undo();
+    assert_eq!(e.image_size(0, &[1]), Some((120.0, 60.0)), "undo restores the image");
+}
+
+#[test]
+fn merge_and_split_cells() {
+    let mut e = Editor::new(doc(&["x"]));
+    e.set_caret(Pos::new(0, 1));
+    e.insert_table(2, 3, 300.0);
+    e.insert_text("A");
+    e.table_next_cell(false);
+    e.insert_text("B");
+    // Select from cell (0,0) to (0,1) and merge.
+    let a = (0..e.para_count()).find(|&i| e.paragraph(i).text() == "A").unwrap();
+    let b = (0..e.para_count()).find(|&i| e.paragraph(i).text() == "B").unwrap();
+    e.sel = Selection { anchor: Pos::new(a, 0), focus: Pos::new(b, 1) };
+    assert!(e.can_merge_cells());
+    e.table_merge_cells();
+    let Block::Table(t) = &e.doc.sections[0].blocks[1] else { panic!() };
+    assert_eq!((t.rows[0].cells[0].col_span, t.rows[0].cells[0].row_span), (2, 1));
+    assert!(t.rows[0].cells[1].merged);
+    let texts: Vec<String> = (0..e.para_count()).map(|i| e.paragraph(i).text()).collect();
+    assert!(texts.contains(&"A".into()) && texts.contains(&"B".into()), "no text lost: {texts:?}");
+
+    // The merged cell lays out across both columns.
+    let laid = Layouter::new().layout(&e.doc);
+    let geom = laid.tables_on(0).next().unwrap().1.clone();
+    let line = &laid.para(a).lines[0];
+    assert!(line.x0 < geom.cols[1]);
+
+    // Tab skips the covered cell; inserting a column inside the span splits it first.
+    e.set_caret(Pos::new(a, 0));
+    e.table_next_cell(false);
+    assert_eq!(e.table_at_caret().unwrap().col, 2);
+    e.set_caret(Pos::new(a, 0));
+    assert!(e.can_split_cell());
+    e.table_split_cell();
+    let Block::Table(t) = &e.doc.sections[0].blocks[1] else { panic!() };
+    assert!(t.rows[0].cells.iter().all(|c| !c.merged && c.col_span == 1));
+    assert_eq!(t.rows[0].cells[1].blocks.len(), 1, "split cell gets an editable paragraph");
+}
+
+#[test]
+fn column_widths_can_be_set() {
+    let mut e = Editor::new(doc(&["x"]));
+    e.set_caret(Pos::new(0, 1));
+    e.insert_table(1, 2, 200.0);
+    e.table_set_col_widths(0, &[1], vec![150.0, 50.0]);
+    let Block::Table(t) = &e.doc.sections[0].blocks[1] else { panic!() };
+    assert_eq!(t.col_widths, vec![150.0, 50.0]);
+}
+
+#[test]
+fn page_setup_changes_size_and_margins_and_reflows() {
+    let long = "word ".repeat(30);
+    let mut e = Editor::new(doc(&[&long]));
+    let before = Layouter::new().layout(&e.doc).line_count(0);
+    let (size, mut margins) = e.page_setup();
+    assert_eq!(size, Size::new(400.0, 500.0));
+    margins.left = 100.0;
+    margins.right = 100.0;
+    e.set_page_setup(Size::new(400.0, 500.0), margins, true);
+    let after = Layouter::new().layout(&e.doc).line_count(0);
+    assert!(after > before, "narrower text area wraps into more lines");
+    e.set_page_setup(Size::new(500.0, 400.0), margins, false);
+    assert_eq!(e.doc.sections[0].page_size, Size::new(500.0, 400.0));
+    e.undo();
+    assert_eq!(e.doc.sections[0].page_size, Size::new(400.0, 500.0));
+}

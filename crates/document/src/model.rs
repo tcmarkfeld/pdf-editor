@@ -370,6 +370,24 @@ pub struct TableCell {
     /// Background fill.
     #[serde(default)]
     pub shading: Option<Rgba>,
+    /// Columns / rows this cell spans (merged cells); 1 × 1 normally.
+    #[serde(default = "one")]
+    pub col_span: u16,
+    #[serde(default = "one")]
+    pub row_span: u16,
+    /// Covered by a neighbouring merged cell: not drawn, holds no content.
+    #[serde(default)]
+    pub merged: bool,
+}
+
+fn one() -> u16 {
+    1
+}
+
+impl TableCell {
+    pub fn new(blocks: Vec<Block>) -> Self {
+        Self { blocks, shading: None, col_span: 1, row_span: 1, merged: false }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

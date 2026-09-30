@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use editor::{Editor, Move, Pos};
-use egui::{Color32, Event, Key, Modifiers, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
+use egui::{Color32, Event, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, TextureHandle, TextureOptions, Vec2};
 use layout::{DocLayout, Item, Layouter};
 use reconstruction::PageAnalysis;
 use render::GlyphCache;
@@ -48,6 +48,17 @@ impl Default for Overlays {
     }
 }
 
+/// An in-progress mouse drag on an object (preview only; applied on release).
+enum Drag {
+    /// Resizing the selected image from its bottom-right corner.
+    Image { section: usize, path: Vec<u32>, page: usize, rect: document::Rect, width: f32 },
+    /// Moving table column boundary `boundary` (index into `cols`).
+    Column { section: usize, path: Vec<u32>, page: usize, cols: Vec<f32>, boundary: usize, x: f32, y0: f32, y1: f32 },
+}
+
+/// Grab distance for column borders and resize handles, in screen points.
+const GRAB: f32 = 4.0;
+
 struct Bitmap {
     scale: f32,
     texture: TextureHandle,
@@ -76,6 +87,23 @@ pub struct DocView {
     scroll_to_caret: bool,
     /// Set by ⌘K; the toolbar opens its link editor.
     pub link_requested: bool,
+    /// Find results to highlight, and which one is current.
+    pub find_highlights: Vec<(usize, std::ops::Range<usize>)>,
+    pub find_current: Option<usize>,
+    /// Message for the title bar, picked up by the app.
+    pub notice: Option<String>,
+    pub spellcheck: bool,
+    /// Misspelled ranges per paragraph text (keyed by a hash of the text).
+    spell_cache: HashMap<u64, Vec<std::ops::Range<usize>>>,
+    /// Caret position under the last right-click (for the context menu).
+    context_pos: Option<Pos>,
+    /// Image selected by clicking it: (section, block path).
+    pub selected_object: Option<(usize, Vec<u32>)>,
+    /// Set by the toolbar; the app shows the file picker.
+    pub insert_image_requested: bool,
+    drag: Option<Drag>,
+    /// The current mouse press began on an object: text selection ignores it.
+    press_on_object: bool,
     /// Page nearest the middle of the viewport (for the status bar).
     pub current_page: usize,
     canvas_width: f32,
@@ -109,6 +137,16 @@ impl DocView {
             pending_scroll: None,
             scroll_to_caret: false,
             link_requested: false,
+            find_highlights: Vec::new(),
+            find_current: None,
+            notice: None,
+            spellcheck: true,
+            spell_cache: HashMap::new(),
+            context_pos: None,
+            selected_object: None,
+            insert_image_requested: false,
+            drag: None,
+            press_on_object: false,
             current_page: 0,
             canvas_width: 0.0,
             words: None,
@@ -187,6 +225,10 @@ impl DocView {
                     ["row_below"] => e.table_insert_row(true),
                     ["heading", l] => e.set_block_type(editor::BlockType::Heading(l.parse().unwrap_or(1))),
                     ["rule"] => e.insert_rule(),
+                    ["image", path] => {
+                        crate::app::insert_image_for_script(self, std::path::Path::new(path));
+                        return;
+                    }
                     _ => {}
                 }
             }
@@ -196,6 +238,11 @@ impl DocView {
             eprintln!("step {step:?}: sel {:?} paras {}", self.editor.sel, self.editor.para_count());
         }
         self.relayout();
+    }
+
+    /// Scrolls the caret into view on the next frame.
+    pub fn reveal_caret(&mut self) {
+        self.scroll_to_caret = true;
     }
 
     /// Returns keyboard focus to the page canvas (after toolbar actions).
@@ -259,8 +306,24 @@ impl DocView {
             let painter = ui.painter_at(rect);
             let origin = response.rect.min;
             let rects: Vec<Rect> = self.page_rects(size.x).into_iter().map(|r| r.translate(origin.to_vec2())).collect();
-            self.handle_pointer(ui, &response, &rects);
+            if !self.object_pointer(ui, &response, &rects) {
+                self.handle_pointer(ui, &response, &rects);
+            }
+            if response.secondary_clicked()
+                && let Some(p) = response.interact_pointer_pos().and_then(|pos| self.hit(&rects, pos))
+            {
+                let (a, b) = self.editor.sel.ordered();
+                if p < a || p > b {
+                    self.editor.set_caret(p);
+                }
+                self.context_pos = Some(p);
+                response.request_focus();
+            }
+            response.context_menu(|ui| self.context_menu(ui));
             self.handle_keys(ui, &response);
+            // Input may have changed the page count: paint from fresh geometry.
+            self.relayout();
+            let rects: Vec<Rect> = self.page_rects(size.x).into_iter().map(|r| r.translate(origin.to_vec2())).collect();
             let clip = viewport.translate(origin.to_vec2()).expand(100.0);
             let mid = viewport.center().y + origin.y;
             self.current_page = rects.iter().position(|r| r.bottom() + PAGE_GAP * self.zoom >= mid).unwrap_or(0);
@@ -333,9 +396,105 @@ impl DocView {
         self.caret_epoch = ui.input(|i| i.time);
     }
 
+    /// Images and table borders under the pointer. Returns true when the
+    /// pointer event was consumed (so text selection doesn't also react).
+    fn object_pointer(&mut self, ui: &egui::Ui, response: &egui::Response, rects: &[Rect]) -> bool {
+        let pointer = ui.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos()));
+        let Some(pointer) = pointer else { return false };
+        let Some((page, x, y)) = self.doc_point(rects, pointer) else { return false };
+        let grab = GRAB / self.zoom;
+
+        // Continue / finish an active drag.
+        if let Some(drag) = &mut self.drag {
+            match drag {
+                Drag::Image { rect, width, .. } => *width = (x - rect.x0).max(24.0),
+                Drag::Column { cols, boundary, x: bx, .. } => {
+                    let b = *boundary;
+                    let lo = cols[b - 1] + 12.0;
+                    let hi = cols.get(b + 1).map_or(f32::MAX, |n| n - 12.0);
+                    *bx = x.clamp(lo, hi);
+                }
+            }
+            ui.ctx().set_cursor_icon(match drag {
+                Drag::Image { .. } => egui::CursorIcon::ResizeNwSe,
+                Drag::Column { .. } => egui::CursorIcon::ResizeColumn,
+            });
+            if !ui.input(|i| i.pointer.primary_down()) {
+                match self.drag.take().expect("drag") {
+                    Drag::Image { section, path, width, .. } => self.editor.resize_image(section, &path, width),
+                    Drag::Column { section, path, cols, boundary, x, .. } => {
+                        let mut xs = cols.clone();
+                        xs[boundary] = x;
+                        let widths = xs.windows(2).map(|w| w[1] - w[0]).collect();
+                        self.editor.table_set_col_widths(section, &path, widths);
+                    }
+                }
+            }
+            return true;
+        }
+
+        // The selected image's bottom-right handle.
+        let handle = self.selected_object.as_ref().and_then(|(s, p)| self.layout.object(*s, p)).filter(|(pg, _)| *pg == page);
+        let on_handle = handle.is_some_and(|(_, r)| (x - r.x1).abs() < grab * 2.0 && (y - r.y1).abs() < grab * 2.0);
+        // A table column border (not the left edge).
+        let border = self.layout.tables_on(page).find_map(|(si, t, lp)| {
+            let rows: Vec<_> = t.rows.iter().filter(|r| r.0 == lp).collect();
+            let (y0, y1) = (rows.first()?.1, rows.last()?.2);
+            if y < y0 || y > y1 {
+                return None;
+            }
+            let b = (1..t.cols.len()).find(|&b| (x - t.cols[b]).abs() < grab)?;
+            Some(Drag::Column { section: si, path: t.path.clone(), page, cols: t.cols.clone(), boundary: b, x: t.cols[b], y0, y1 })
+        });
+        if on_handle {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        } else if border.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeColumn);
+        }
+
+        let pressed = ui.input(|i| i.pointer.primary_pressed()) && (response.is_pointer_button_down_on() || response.hovered());
+        if !pressed {
+            if self.press_on_object && ui.input(|i| i.pointer.primary_down()) {
+                return true;
+            }
+            self.press_on_object = false;
+            return false;
+        }
+        self.press_on_object = true;
+        if let (true, Some((_, r)), Some((s, p))) = (on_handle, handle, self.selected_object.clone()) {
+            self.drag = Some(Drag::Image { section: s, path: p, page, rect: r, width: r.width() });
+            return true;
+        }
+        if let Some(d) = border {
+            self.selected_object = None;
+            self.drag = Some(d);
+            return true;
+        }
+        if let Some((si, obj)) = self.layout.object_at(page, x, y) {
+            self.selected_object = Some((si, obj.path.clone()));
+            response.request_focus();
+            return true;
+        }
+        self.selected_object = None;
+        self.press_on_object = false;
+        false
+    }
+
     fn handle_keys(&mut self, ui: &egui::Ui, response: &egui::Response) {
         if !response.has_focus() {
             return;
+        }
+        // With an image selected, Delete removes it and Escape deselects.
+        if let Some((section, path)) = self.selected_object.clone() {
+            let (del, esc) = ui.input(|i| (i.key_pressed(Key::Backspace) || i.key_pressed(Key::Delete), i.key_pressed(Key::Escape)));
+            if del {
+                self.editor.delete_block(section, &path);
+                self.selected_object = None;
+                return;
+            }
+            if esc || ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(_)))) {
+                self.selected_object = None;
+            }
         }
         ui.memory_mut(|m| {
             m.set_focus_lock_filter(
@@ -485,7 +644,11 @@ impl DocView {
             self.paint_content(&ctx, painter, i, view, clip);
         }
 
+        if self.spellcheck && !pending && self.overlays.reconstructed {
+            self.paint_spelling(painter, i, view);
+        }
         self.paint_selection_and_caret(ui, painter, i, view);
+        self.paint_object_ui(painter, i, view);
         self.paint_debug(painter, i, view);
     }
 
@@ -537,6 +700,21 @@ impl DocView {
     }
 
     fn paint_selection_and_caret(&self, ui: &egui::Ui, painter: &egui::Painter, i: usize, view: View) {
+        for (k, (para, range)) in self.find_highlights.iter().enumerate() {
+            if *para >= self.layout.para_count() {
+                continue;
+            }
+            let fill = if self.find_current == Some(k) {
+                Color32::from_rgba_unmultiplied(255, 150, 0, 120)
+            } else {
+                Color32::from_rgba_unmultiplied(255, 214, 10, 90)
+            };
+            for (page, r) in self.layout.selection_rects(*para, range.clone()) {
+                if page == i {
+                    painter.rect_filled(view.rect(&r), 2.0, fill);
+                }
+            }
+        }
         let sel = self.editor.sel;
         let (a, b) = sel.ordered();
         if !sel.is_collapsed() {
@@ -568,6 +746,160 @@ impl DocView {
                 painter.line_segment([r.min, r.max], Stroke::new(2.0, Color32::from_rgb(24, 24, 28)));
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(120));
+        }
+    }
+
+    fn paint_object_ui(&self, painter: &egui::Painter, i: usize, view: View) {
+        let accent = Color32::from_rgb(38, 110, 235);
+        if let Some((s, p)) = &self.selected_object
+            && let Some((page, r)) = self.layout.object(*s, p)
+            && page == i
+        {
+            let r = view.rect(&r);
+            painter.rect_stroke(r, 0.0, Stroke::new(2.0, accent), egui::StrokeKind::Outside);
+            for c in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
+                let h = Rect::from_center_size(c, Vec2::splat(9.0));
+                painter.rect_filled(h, 2.0, Color32::WHITE);
+                painter.rect_stroke(h, 2.0, Stroke::new(1.5, accent), egui::StrokeKind::Inside);
+            }
+        }
+        match &self.drag {
+            Some(Drag::Image { page, rect, width, .. }) if *page == i => {
+                let h = rect.height() * width / rect.width().max(1.0);
+                let r = view.rect(&document::Rect::from_xywh(rect.x0, rect.y0, *width, h));
+                painter.rect_stroke(r, 0.0, Stroke::new(1.5, accent.gamma_multiply(0.8)), egui::StrokeKind::Middle);
+            }
+            Some(Drag::Column { page, x, y0, y1, .. }) if *page == i => {
+                painter.line_segment([view.to_screen(*x, *y0), view.to_screen(*x, *y1)], Stroke::new(2.0, accent));
+            }
+            _ => {}
+        }
+    }
+
+    fn misspelled(&mut self, para: usize) -> Vec<std::ops::Range<usize>> {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let p = self.editor.paragraph(para);
+        let text = p.text();
+        let mut h = DefaultHasher::new();
+        text.hash(&mut h);
+        let found = self.spell_cache.entry(h.finish()).or_insert_with(|| crate::spell::misspellings(&text)).clone();
+        // Links, email addresses and web addresses aren't words.
+        found
+            .into_iter()
+            .filter(|r| {
+                let word = &text[r.clone()];
+                let around = text[..r.start].rsplit(char::is_whitespace).next().unwrap_or("").to_string()
+                    + text[r.end..].split(char::is_whitespace).next().unwrap_or("");
+                let domain = around.as_bytes().windows(2).any(|w| w[0] == b'.' && w[1].is_ascii_alphabetic());
+                p.style_at(r.start + 1).link.is_none() && !word.contains(['@', '/']) && !around.contains(['@', '/']) && !domain
+            })
+            .collect()
+    }
+
+    /// Red wavy underlines under misspelled words (not the word being typed).
+    fn paint_spelling(&mut self, painter: &egui::Painter, i: usize, view: View) {
+        let caret = self.editor.sel.is_collapsed().then_some(self.editor.sel.focus);
+        let paras: Vec<usize> = (0..self.layout.para_count().min(self.editor.para_count()))
+            .filter(|&p| self.layout.para(p).lines.iter().any(|l| self.layout.line_page(p, l) == i))
+            .collect();
+        let red = Color32::from_rgb(230, 60, 60);
+        for para in paras {
+            for range in self.misspelled(para) {
+                if caret.is_some_and(|c| c.para == para && c.offset == range.end) {
+                    continue;
+                }
+                for (page, r) in self.layout.selection_rects(para, range.clone()) {
+                    if page != i {
+                        continue;
+                    }
+                    let r = view.rect(&r);
+                    let y = r.bottom() - 1.5 * view.zoom.max(0.5);
+                    let step = 2.0;
+                    let pts: Vec<Pos2> = (0..=((r.width() / step) as usize))
+                        .map(|k| Pos2::new(r.left() + k as f32 * step, y + if k % 2 == 0 { 0.0 } else { 1.6 }))
+                        .collect();
+                    painter.add(egui::Shape::line(pts, Stroke::new(1.1, red)));
+                }
+            }
+        }
+    }
+
+    fn context_menu(&mut self, ui: &mut egui::Ui) {
+        if let Some(p) = self.context_pos.filter(|p| self.spellcheck && p.para < self.editor.para_count()) {
+            let text = self.editor.paragraph(p.para).text();
+            let bad = self.misspelled(p.para).into_iter().find(|r| r.start <= p.offset && p.offset <= r.end);
+            let e = &mut self.editor;
+            if let Some(range) = bad {
+                let word = text[range.clone()].to_string();
+                let guesses = crate::spell::suggestions(&word);
+                if guesses.is_empty() {
+                    ui.add_enabled(false, egui::Button::new("No suggestions"));
+                }
+                for g in guesses {
+                    if ui.button(RichText::new(&g).strong()).clicked() {
+                        e.select_match(&editor::Match { para: p.para, range: range.clone() });
+                        e.insert_text(&g);
+                        ui.close();
+                    }
+                }
+                ui.separator();
+                if ui.button("Learn Spelling").clicked() {
+                    crate::spell::learn(&word);
+                    self.spell_cache.clear();
+                    ui.close();
+                }
+                if ui.button("Ignore Spelling").clicked() {
+                    crate::spell::ignore(&word);
+                    self.spell_cache.clear();
+                    ui.close();
+                }
+                ui.separator();
+            }
+        }
+        let e = &mut self.editor;
+        let has_sel = !e.sel.is_collapsed();
+        if ui.add_enabled(has_sel, egui::Button::new("Cut")).clicked() {
+            let t = e.cut();
+            ui.ctx().copy_text(t);
+            ui.close();
+        }
+        if ui.add_enabled(has_sel, egui::Button::new("Copy")).clicked() {
+            let t = e.copy();
+            ui.ctx().copy_text(t);
+            ui.close();
+        }
+        if ui.button("Paste").clicked() {
+            if let Some(t) = arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok()) {
+                e.paste(&t);
+            }
+            ui.close();
+        }
+        if e.table_at_caret().is_some() {
+            ui.separator();
+            if e.can_merge_cells() && ui.button("Merge Cells").clicked() {
+                e.table_merge_cells();
+                ui.close();
+            }
+            if e.can_split_cell() && ui.button("Unmerge Cells").clicked() {
+                e.table_split_cell();
+                ui.close();
+            }
+            #[allow(clippy::type_complexity)]
+            let items: [(&str, fn(&mut editor::Editor)); 7] = [
+                ("Insert Row Above", |e| e.table_insert_row(false)),
+                ("Insert Row Below", |e| e.table_insert_row(true)),
+                ("Insert Column Left", |e| e.table_insert_col(false)),
+                ("Insert Column Right", |e| e.table_insert_col(true)),
+                ("Delete Row", |e| e.table_delete_row()),
+                ("Delete Column", |e| e.table_delete_col()),
+                ("Delete Table", |e| e.table_delete()),
+            ];
+            for (label, f) in items {
+                if ui.button(label).clicked() {
+                    f(e);
+                    ui.close();
+                }
+            }
         }
     }
 

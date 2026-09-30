@@ -8,7 +8,85 @@ use document::Document;
 use layout::DocLayout;
 use pdf_source::PdfSource;
 
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
 const ATTACHMENT: &str = "reflow-document.json";
+
+/// `~/Library/Application Support/Reflow/<sub>` (created on demand).
+fn support_dir(sub: &str) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    let dir = PathBuf::from(home).join("Library/Application Support/Reflow").join(sub);
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
+/// Stable per-file key: FNV-1a of the absolute path.
+fn key(path: &Path) -> String {
+    let abs = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in abs.to_string_lossy().bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Where the untouched original of `path` is kept once Reflow overwrites it.
+pub fn original_backup(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    Some(support_dir("Originals")?.join(format!("{}-{name}", key(path))))
+}
+
+pub fn has_original_backup(path: &Path) -> bool {
+    original_backup(path).is_some_and(|b| b.exists())
+}
+
+/// Before the first overwrite of an existing file, keep a copy of it. Later
+/// saves leave that copy alone, so it is always the pre-Reflow version.
+pub fn ensure_original_backup(path: &Path) -> std::io::Result<()> {
+    let Some(backup) = original_backup(path) else { return Ok(()) };
+    if path.exists() && !backup.exists() {
+        std::fs::copy(path, backup)?;
+    }
+    Ok(())
+}
+
+pub fn restore_original(path: &Path) -> std::io::Result<()> {
+    let backup = original_backup(path).ok_or_else(|| std::io::Error::other("no backup location"))?;
+    std::fs::copy(backup, path).map(|_| ())
+}
+
+fn autosave_file(path: &Path) -> Option<PathBuf> {
+    Some(support_dir("Autosave")?.join(format!("{}.json", key(path))))
+}
+
+/// Periodic crash-safety copy of unsaved edits to `path`.
+pub fn write_autosave(path: &Path, doc: &Document) {
+    if let (Some(file), Ok(bytes)) = (autosave_file(path), doc.to_bytes(None)) {
+        let tmp = file.with_extension("tmp");
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(tmp, file);
+        }
+    }
+}
+
+/// Unsaved edits left behind (e.g. by a crash) that are newer than the file.
+pub fn read_autosave(path: &Path) -> Option<(Document, SystemTime)> {
+    let file = autosave_file(path)?;
+    let saved = std::fs::metadata(&file).ok()?.modified().ok()?;
+    let current = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+    if current.is_some_and(|c| c >= saved) {
+        clear_autosave(path);
+        return None;
+    }
+    Some((Document::from_bytes(&std::fs::read(file).ok()?).ok()?.0, saved))
+}
+
+pub fn clear_autosave(path: &Path) {
+    if let Some(file) = autosave_file(path) {
+        let _ = std::fs::remove_file(file);
+    }
+}
 
 pub fn pdf_bytes(doc: &Document, layout: &DocLayout) -> Result<Vec<u8>, String> {
     // Fingerprint exactly what PDFium will extract from the saved file, so
@@ -36,6 +114,36 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/pdf/resume-single.pdf");
         let src = PdfSource::open(&path).ok()?;
         Some(Document { sections: vec![Arc::new(reconstruction::import_page(&src, 0).ok()?.0)] })
+    }
+
+    /// Backups and autosaves live under $HOME; point it at a temp dir.
+    #[test]
+    fn original_backup_and_autosave_lifecycle() {
+        let home = std::env::temp_dir().join(format!("reflow-home-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        // SAFETY: only this test reads HOME in this process's persist code paths.
+        unsafe { std::env::set_var("HOME", &home) };
+        let file = home.join("resume.pdf");
+        std::fs::write(&file, b"original").unwrap();
+
+        ensure_original_backup(&file).unwrap();
+        std::fs::write(&file, b"first save").unwrap();
+        ensure_original_backup(&file).unwrap(); // must not replace the original copy
+        std::fs::write(&file, b"second save").unwrap();
+        assert!(has_original_backup(&file));
+        restore_original(&file).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"original");
+
+        // An autosave newer than the file is offered; one older is dropped.
+        let doc = Document::default();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_autosave(&file, &doc);
+        assert!(read_autosave(&file).is_some());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&file, b"saved after the autosave").unwrap();
+        assert!(read_autosave(&file).is_none());
+        clear_autosave(&file);
+        std::fs::remove_dir_all(home).ok();
     }
 
     #[test]

@@ -74,3 +74,21 @@ fn unchanged_sections_reuse_cached_layout() {
     assert!(Arc::ptr_eq(&first.sections[0], &second.sections[0]));
     assert!(!Arc::ptr_eq(&first.sections[1], &second.sections[1]));
 }
+
+#[test]
+fn overflow_continues_onto_the_next_page_instead_of_inserting_one() {
+    let long = "word ".repeat(60); // 12 lines at 20pt: 8 fit on a page
+    let doc = Document { sections: vec![Arc::new(section(vec![para(&long)])), Arc::new(section(vec![para("page two")]))] };
+    let laid = Layouter::new().layout(&doc);
+    assert_eq!(laid.page_count(), 2, "no extra page between the two");
+    let overflow = laid.para(0).lines.iter().filter(|l| laid.line_page(0, l) == 1).count();
+    assert!(overflow > 0);
+    let last_carried = laid.para(0).lines.last().unwrap();
+    let next = &laid.para(1).lines[0];
+    assert_eq!(laid.line_page(1, next), 1);
+    assert!(next.top >= last_carried.bottom - 0.01, "page two's content starts below the carried text");
+    assert_eq!(laid.page_sources(1).len(), 2);
+    // Clicking the carried text on page two lands in the first paragraph.
+    let hit = laid.hit(1, last_carried.x0 + 5.0, (last_carried.top + last_carried.bottom) * 0.5).unwrap();
+    assert_eq!(hit.para, 0);
+}

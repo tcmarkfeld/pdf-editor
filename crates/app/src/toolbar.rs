@@ -147,7 +147,7 @@ fn swatches(ui: &mut Ui, none_label: Option<&str>) -> Option<Option<Rgba>> {
 }
 
 /// Floating rounded container for a group of toolbar controls.
-fn pill<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+pub fn pill<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let p = theme::palette(ui.ctx());
     let shadow_alpha = if ui.visuals().dark_mode { 60 } else { 14 };
     Frame::new()
@@ -165,7 +165,7 @@ fn pill<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// Lays out `add` horizontally centred in the available width (using the
 /// width measured on the previous frame).
-fn centered(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
+pub fn centered(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
     let id = ui.id().with(id);
     let width: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
     ui.horizontal(|ui| {
@@ -406,6 +406,9 @@ impl Toolbar {
                     }
                 }
             });
+            if icon_button(ui, Icon::Image, false, true, "Insert image").clicked() {
+                view.insert_image_requested = true;
+            }
             if icon_button(ui, Icon::Rule, false, true, "Insert horizontal line").clicked() {
                 e.insert_rule();
                 acted = true;
@@ -445,6 +448,15 @@ impl Toolbar {
                     f(e);
                     acted = true;
                 }
+            }
+            divider(ui);
+            if icon_button(ui, Icon::Merge, false, e.can_merge_cells(), "Merge cells (select across cells first)").clicked() {
+                e.table_merge_cells();
+                acted = true;
+            }
+            if icon_button(ui, Icon::Split, false, e.can_split_cell(), "Unmerge cells").clicked() {
+                e.table_split_cell();
+                acted = true;
             }
             divider(ui);
             let borders = e.table_borders();

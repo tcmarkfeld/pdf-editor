@@ -21,22 +21,23 @@ impl DocLayout {
 
     /// The caret position nearest to a point on a page.
     pub fn hit(&self, page: usize, x: f32, y: f32) -> Option<Hit> {
-        let (si, lp) = self.pages[page];
-        let mut best: Option<(f32, usize, usize)> = None;
-        for (pi, pl) in self.sections[si].paras.iter().enumerate() {
-            for (li, line) in pl.lines.iter().enumerate() {
-                if line.page != lp {
-                    continue;
-                }
-                let dy = (line.top - y).max(y - line.bottom).max(0.0);
-                let dx = (line.x0 - x).max(x - line.x1).max(0.0);
-                let score = dy * 2.0 + dx;
-                if best.is_none_or(|b| score < b.0) {
-                    best = Some((score, pi, li));
+        let mut best: Option<(f32, usize, usize, usize)> = None;
+        for &(si, lp) in self.page_sources(page) {
+            for (pi, pl) in self.sections[si].paras.iter().enumerate() {
+                for (li, line) in pl.lines.iter().enumerate() {
+                    if line.page != lp {
+                        continue;
+                    }
+                    let dy = (line.top - y).max(y - line.bottom).max(0.0);
+                    let dx = (line.x0 - x).max(x - line.x1).max(0.0);
+                    let score = dy * 2.0 + dx;
+                    if best.is_none_or(|b| score < b.0) {
+                        best = Some((score, si, pi, li));
+                    }
                 }
             }
         }
-        let (_, pi, li) = best?;
+        let (_, si, pi, li) = best?;
         let para = self.global_para(si, pi);
         Some(Hit { para, offset: self.offset_at(para, li, x) })
     }

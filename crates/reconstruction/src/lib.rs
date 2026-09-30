@@ -449,7 +449,7 @@ impl Builder<'_> {
                 let right = if ruled { cx1 - pad } else { cx1 };
                 let placed = build_paragraphs(ctx, lines, cx0, right.max(cx0 + 1.0));
                 let blocks = if placed.is_empty() { vec![self.empty_cell_paragraph(ctx)] } else { finalize(placed, tops[ri]) };
-                cells.push(TableCell { blocks, shading: None });
+                cells.push(TableCell::new(blocks));
             }
             trows.push(TableRow { min_height: round2(tops[ri + 1] - tops[ri]), cells });
         }

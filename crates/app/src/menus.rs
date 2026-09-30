@@ -43,7 +43,7 @@ impl NativeMenu {
                 &PredefinedMenuItem::hide_others(None),
                 &PredefinedMenuItem::show_all(None),
                 &sep(),
-                &PredefinedMenuItem::quit(None),
+                &item("Quit Reflow", Command::Quit, Some((CMD, Code::KeyQ))),
             ],
         )
         .expect("app menu");
@@ -55,6 +55,9 @@ impl NativeMenu {
                 &sep(),
                 &item("Save", Command::Save, Some((CMD, Code::KeyS))),
                 &item("Save As…", Command::SaveAs, Some((CMD_SHIFT, Code::KeyS))),
+                &item("Revert to Original…", Command::RevertToOriginal, None),
+                &sep(),
+                &item("Page Setup…", Command::PageSetup, Some((CMD_SHIFT, Code::KeyP))),
                 &sep(),
                 &PredefinedMenuItem::close_window(None),
             ],
@@ -72,7 +75,15 @@ impl NativeMenu {
                 &item("Paste", Command::Paste, Some((CMD, Code::KeyV))),
                 &item("Select All", Command::SelectAll, Some((CMD, Code::KeyA))),
                 &sep(),
+                &sep(),
+                &item("Find…", Command::Find, Some((CMD, Code::KeyF))),
+                &item("Find and Replace…", Command::Replace, Some((CMD_ALT, Code::KeyF))),
+                &item("Find Next", Command::FindNext, Some((CMD, Code::KeyG))),
+                &item("Find Previous", Command::FindPrevious, Some((CMD_SHIFT, Code::KeyG))),
+                &sep(),
                 &item("Add Link…", Command::Link, Some((CMD, Code::KeyK))),
+                &sep(),
+                &item("Check Spelling While Typing", Command::ToggleSpelling, None),
             ],
         )
         .expect("edit menu");
@@ -105,6 +116,17 @@ impl NativeMenu {
             ],
         )
         .expect("format menu");
+        let insert = Submenu::with_items(
+            "Insert",
+            true,
+            &[
+                &item("Image…", Command::InsertImage, None),
+                &item("Table", Command::InsertTable, None),
+                &item("Horizontal Line", Command::InsertRule, None),
+                &item("Link…", Command::Link, None),
+            ],
+        )
+        .expect("insert menu");
         let view = Submenu::with_items(
             "View",
             true,
@@ -138,7 +160,7 @@ impl NativeMenu {
         )
         .expect("window menu");
 
-        let menu = Menu::with_items(&[&app, &file, &edit, &format, &view, &window]).expect("menu bar");
+        let menu = Menu::with_items(&[&app, &file, &edit, &insert, &format, &view, &window]).expect("menu bar");
         menu.init_for_nsapp();
         window.set_as_windows_menu_for_nsapp();
 

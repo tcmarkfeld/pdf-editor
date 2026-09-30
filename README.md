@@ -54,6 +54,25 @@ Shortcuts: ⇧⌘7 / ⇧⌘8 numbered / bulleted list, ⌥⌘0–3 Normal / head
 ⌘[ / ⌘] indent, ⇧⌘L/E/R/J alignment, ⇧⌘X strikethrough, ⌘K link, ⌘\ clear
 formatting. With nothing selected, formatting applies to what you type next.
 
+### Documents, objects and pages
+
+- **Your files are protected.** Closing, quitting or opening another file with
+  unsaved changes asks first. Before the first save over a PDF, the untouched
+  original is kept in `~/Library/Application Support/Reflow/Originals`;
+  *File → Revert to Original…* restores it. Unsaved edits are autosaved every
+  15 seconds and offered for recovery after a crash.
+- **Find & replace**: ⌘F / ⌥⌘F, ⌘G / ⇧⌘G for next/previous, with a match-case option.
+- **Spell check** uses the macOS dictionary (red underlines; right-click for
+  suggestions, Learn, Ignore). Toggle it in *Edit → Check Spelling While Typing*.
+- **Images**: *Insert → Image…*, the toolbar button, or drag a PNG/JPEG onto
+  the page. Click to select, drag a corner to resize, Delete to remove.
+- **Tables**: drag a column border to resize; select cells and *Merge Cells*
+  (toolbar or right-click), *Split Cell* to undo it.
+- **Page Setup** (⇧⌘P): paper size, orientation and margins for the whole
+  document or the current page; text reflows to fit.
+- Text that outgrows a page flows onto the next page instead of piling up
+  on a continuation page.
+
 ## CLI
 
 ```bash

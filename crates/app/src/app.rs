@@ -45,6 +45,26 @@ pub enum Command {
     FitWidth,
     ToggleInspector,
     Appearance(egui::ThemePreference),
+    Quit,
+    RevertToOriginal,
+    ToggleSpelling,
+    InsertImage,
+    InsertTable,
+    PageSetup,
+    Find,
+    Replace,
+    FindNext,
+    FindPrevious,
+}
+
+/// An action waiting on the user's answer to "save changes?" (or, for
+/// reverting, "are you sure?").
+#[derive(Clone, Debug, PartialEq)]
+enum Pending {
+    Quit,
+    Open(PathBuf),
+    OpenDialog,
+    Revert,
 }
 
 /// Space left of the header for the window's traffic-light buttons.
@@ -64,13 +84,24 @@ pub struct App {
     title: String,
     /// Short-lived message in the title bar (text, time shown).
     notice: Option<(String, f64)>,
+    confirm: Option<Pending>,
+    /// Set once the user has agreed to close (so the close isn't vetoed).
+    allow_close: bool,
+    /// Unsaved edits found from a previous session, offered once loaded.
+    recovery: Option<(Document, std::time::SystemTime)>,
+    /// Revision and time of the last autosave.
+    autosaved: (u64, f64),
     saved_revision: u64,
     status: String,
     show_debug: bool,
     toolbar: crate::toolbar::Toolbar,
+    find: crate::findbar::FindBar,
+    page_setup: crate::pagesetup::PageSetup,
     capture: Option<Capture>,
     /// Input events to feed egui next frame (menu edit commands, scripts).
     injected: Vec<egui::Event>,
+    /// Commands raised from inside panels, run at the start of next frame.
+    injected_commands: Vec<Command>,
     #[cfg(target_os = "macos")]
     menu: crate::menus::NativeMenu,
     logo: egui::TextureHandle,
@@ -84,12 +115,19 @@ impl App {
             pdf_path: None,
             title: String::new(),
             notice: None,
+            confirm: None,
+            allow_close: false,
+            recovery: None,
+            autosaved: (0, 0.0),
             saved_revision: 0,
             status: String::new(),
             show_debug: std::env::var_os("REFLOW_DEBUG").is_some(),
             toolbar: Default::default(),
+            find: Default::default(),
+            page_setup: Default::default(),
             capture: Capture::from_env(),
             injected: Vec::new(),
+            injected_commands: Vec::new(),
             #[cfg(target_os = "macos")]
             menu: crate::menus::NativeMenu::install(&cc.egui_ctx),
             logo: load_logo(&cc.egui_ctx),
@@ -103,7 +141,51 @@ impl App {
         app
     }
 
+    /// Opens `path`, first asking to save unsaved changes.
     fn open(&mut self, ctx: &egui::Context, path: PathBuf) {
+        self.request(ctx, Pending::Open(path));
+    }
+
+    fn request(&mut self, ctx: &egui::Context, action: Pending) {
+        if self.dirty() || action == Pending::Revert {
+            self.confirm = Some(action);
+        } else {
+            self.proceed(ctx, action);
+        }
+    }
+
+    fn proceed(&mut self, ctx: &egui::Context, action: Pending) {
+        match action {
+            Pending::Quit => {
+                self.allow_close = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Pending::Open(path) => self.open_now(ctx, path),
+            Pending::OpenDialog => {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Documents", &["pdf", "reflow"]).pick_file() {
+                    self.open_now(ctx, path);
+                }
+            }
+            Pending::Revert => {
+                let Some(path) = self.pdf_path.clone() else { return };
+                match crate::persist::restore_original(&path) {
+                    Ok(()) => {
+                        crate::persist::clear_autosave(&path);
+                        self.saved_revision = self.doc.as_ref().map_or(0, |d| d.editor.revision);
+                        self.open_now(ctx, path);
+                        self.notice = Some(("Reverted to the original".into(), now()));
+                    }
+                    Err(e) => self.notice = Some((format!("Couldn’t revert: {e}"), now())),
+                }
+            }
+        }
+    }
+
+    fn open_now(&mut self, ctx: &egui::Context, path: PathBuf) {
+        if let Some(old) = &self.pdf_path {
+            crate::persist::clear_autosave(old);
+        }
+        self.recovery = if self.capture.is_none() { crate::persist::read_autosave(&path) } else { None };
         if path.extension().is_some_and(|e| e == "reflow") {
             match Document::load(&path) {
                 Ok(doc) => {
@@ -226,6 +308,10 @@ impl App {
         if path.extension().is_none_or(|e| !e.eq_ignore_ascii_case("pdf")) {
             path.set_extension("pdf");
         }
+        if let Err(e) = crate::persist::ensure_original_backup(&path) {
+            self.notice = Some((format!("Couldn’t keep a backup of the original, so nothing was saved: {e}"), now()));
+            return;
+        }
         view.relayout();
         let result = crate::persist::pdf_bytes(&view.editor.doc, &view.layout).and_then(|bytes| write_atomically(&path, &bytes).map_err(|e| e.to_string()));
         match result {
@@ -234,15 +320,16 @@ impl App {
                 self.title = stem(&path);
                 self.pdf_path = Some(path);
                 self.notice = Some(("Saved".into(), now()));
+                if let Some(p) = &self.pdf_path {
+                    crate::persist::clear_autosave(p);
+                }
             }
             Err(e) => self.notice = Some((format!("Couldn’t save: {e}"), now())),
         }
     }
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Documents", &["pdf", "reflow"]).pick_file() {
-            self.open(ctx, path);
-        }
+        self.request(ctx, Pending::OpenDialog);
     }
 
     pub fn run(&mut self, ctx: &egui::Context, cmd: Command) {
@@ -257,6 +344,15 @@ impl App {
                 return;
             }
             Command::Appearance(pref) => return ctx.set_theme(pref),
+            Command::Quit => return self.request(ctx, Pending::Quit),
+            Command::RevertToOriginal => {
+                if self.pdf_path.as_deref().is_some_and(crate::persist::has_original_backup) {
+                    self.request(ctx, Pending::Revert);
+                } else {
+                    self.notice = Some(("Nothing to revert — Reflow hasn’t overwritten this file".into(), now()));
+                }
+                return;
+            }
             // Edit commands go through egui's input so they reach whatever
             // has focus (the page, or a text field such as the link box).
             Command::Undo => return self.injected.push(key(Key::Z, Modifiers::COMMAND)),
@@ -273,6 +369,32 @@ impl App {
             _ => {}
         }
         let Some(view) = &mut self.doc else { return };
+        match cmd {
+            Command::Find => return self.find.show(false),
+            Command::PageSetup => return self.page_setup.show(view),
+            Command::InsertImage => {
+                if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg"]).pick_file() {
+                    insert_image_file(view, &path);
+                }
+                return view.focus_canvas(ctx);
+            }
+            Command::InsertTable => {
+                let para = view.editor.sel.focus.para.min(view.layout.para_count().saturating_sub(1));
+                let width = view.layout.para(para).width;
+                view.editor.insert_table(3, 3, width);
+                return view.focus_canvas(ctx);
+            }
+            Command::ToggleSpelling => {
+                view.spellcheck = !view.spellcheck;
+                return;
+            }
+            Command::Replace => return self.find.show(true),
+            Command::FindNext | Command::FindPrevious => {
+                self.find.open = true;
+                return self.find.step(view, cmd == Command::FindPrevious);
+            }
+            _ => {}
+        }
         let e = &mut view.editor;
         match cmd {
             Command::Link => view.link_requested = true,
@@ -466,7 +588,11 @@ impl App {
         }
         let dropped = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).find(|p| !p.as_os_str().is_empty()));
         if let Some(path) = dropped {
-            self.open(ctx, path);
+            let is_image = path.extension().is_some_and(|e| ["png", "jpg", "jpeg"].contains(&e.to_string_lossy().to_lowercase().as_str()));
+            match &mut self.doc {
+                Some(view) if is_image => insert_image_file(view, &path),
+                _ => self.open(ctx, path),
+            }
         }
     }
 
@@ -529,6 +655,172 @@ impl App {
     }
 }
 
+impl App {
+    /// Intercepts window close / quit while there are unsaved changes.
+    fn guard_close(&mut self, ctx: &egui::Context) {
+        // (The screenshot harness quits on its own; don't veto that.)
+        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close && self.dirty() && self.capture.is_none() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm = Some(Pending::Quit);
+        }
+    }
+
+    /// Every 15 s of editing, keep a crash-safety copy of unsaved changes.
+    fn autosave(&mut self) {
+        // Scripted test runs must never leave recovery files behind.
+        if self.capture.is_some() {
+            return;
+        }
+        let (Some(view), Some(path)) = (&self.doc, &self.pdf_path) else { return };
+        let rev = view.editor.revision;
+        if self.dirty() && rev != self.autosaved.0 && now() - self.autosaved.1 > 15.0 && !view.editor.doc.sections.iter().any(|s| s.pending) {
+            crate::persist::write_autosave(path, &view.editor.doc);
+            self.autosaved = (rev, now());
+        }
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(view) = &mut self.doc {
+            self.page_setup.ui(ctx, view);
+        }
+        let p = theme::palette(ctx);
+        let name = self.file_stem();
+        if let Some(action) = self.confirm.clone() {
+            let (title, body) = if action == Pending::Revert {
+                (
+                    format!("Revert “{name}” to the original PDF?"),
+                    "The file will be replaced by the version from before Reflow first saved it. All changes since will be lost.".to_string(),
+                )
+            } else {
+                (format!("Do you want to save the changes to “{name}”?"), "Your changes will be lost if you don’t save them.".to_string())
+            };
+            let mut choice = None;
+            let modal = egui::Modal::new(egui::Id::new("confirm")).show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.add_space(4.0);
+                ui.label(RichText::new(title).size(15.0).strong());
+                ui.add_space(6.0);
+                ui.label(RichText::new(body).size(13.0).color(p.text_muted));
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    if action != Pending::Revert && ui.button("Don’t Save").clicked() {
+                        choice = Some(false);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let primary = if action == Pending::Revert { "Revert" } else { "Save" };
+                        if ui.add(primary_button(primary)).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            choice = Some(true);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.confirm = None;
+                        }
+                    });
+                });
+            });
+            if modal.should_close() && choice.is_none() {
+                self.confirm = None;
+            }
+            match choice {
+                Some(true) if action == Pending::Revert => {
+                    self.confirm = None;
+                    self.proceed(ctx, action);
+                }
+                Some(true) => {
+                    self.confirm = None;
+                    self.save(false);
+                    if !self.dirty() {
+                        self.proceed(ctx, action);
+                    }
+                }
+                Some(false) => {
+                    self.confirm = None;
+                    if let Some(path) = &self.pdf_path {
+                        crate::persist::clear_autosave(path);
+                    }
+                    // Discarding: treat the document as clean for what follows.
+                    self.saved_revision = self.doc.as_ref().map_or(0, |d| d.editor.revision);
+                    self.proceed(ctx, action);
+                }
+                None => {}
+            }
+        }
+
+        let loaded = self.doc.as_ref().is_some_and(|d| d.editor.doc.sections.iter().all(|s| !s.pending));
+        if loaded && let Some((_, when)) = &self.recovery {
+            let ago = when.elapsed().map_or(0, |d| d.as_secs() / 60);
+            let ago = match ago {
+                0 => "less than a minute ago".to_string(),
+                1 => "a minute ago".to_string(),
+                n if n < 120 => format!("{n} minutes ago"),
+                n => format!("{} hours ago", n / 60),
+            };
+            let mut choice = None;
+            egui::Modal::new(egui::Id::new("recover")).show(ctx, |ui| {
+                ui.set_width(380.0);
+                ui.label(RichText::new(format!("Recover unsaved changes to “{name}”?")).size(15.0).strong());
+                ui.add_space(6.0);
+                ui.label(RichText::new(format!("Reflow closed before these edits were saved. They were autosaved {ago}.")).size(13.0).color(p.text_muted));
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Discard").clicked() {
+                        choice = Some(false);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(primary_button("Restore")).clicked() {
+                            choice = Some(true);
+                        }
+                    });
+                });
+            });
+            match choice {
+                Some(true) => {
+                    let (doc, _) = self.recovery.take().expect("recovery");
+                    if let Some(view) = &mut self.doc {
+                        let worker = view.worker.take();
+                        *view = DocView::new(Editor::new(doc), worker);
+                    }
+                    // Restored edits are unsaved until the user saves.
+                    self.saved_revision = u64::MAX;
+                }
+                Some(false) => {
+                    self.recovery = None;
+                    if let Some(path) = &self.pdf_path {
+                        crate::persist::clear_autosave(path);
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+}
+
+pub fn insert_image_for_script(view: &mut DocView, path: &Path) {
+    insert_image_file(view, path);
+}
+
+/// Reads a PNG/JPEG file and inserts it at the caret.
+fn insert_image_file(view: &mut DocView, path: &Path) {
+    let result = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
+        let format = image::guess_format(&bytes).map_err(|e| e.to_string())?;
+        let img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+        let mut res = document::ImageResource::png(bytes, img.width(), img.height());
+        res.format = match format {
+            image::ImageFormat::Png => document::ImageFormat::Png,
+            image::ImageFormat::Jpeg => document::ImageFormat::Jpeg,
+            _ => return Err("only PNG and JPEG images are supported".into()),
+        };
+        Ok(res)
+    });
+    match result {
+        Ok(res) => {
+            let para = view.editor.sel.focus.para.min(view.layout.para_count().saturating_sub(1));
+            let width = view.layout.para(para).width;
+            view.editor.insert_image(std::sync::Arc::new(res), width);
+        }
+        Err(e) => view.notice = Some(format!("Couldn’t insert image: {e}")),
+    }
+}
+
 fn now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
 }
@@ -573,7 +865,12 @@ impl eframe::App for App {
         }
         #[cfg(not(target_os = "macos"))]
         self.shortcuts(&ctx);
+        for cmd in std::mem::take(&mut self.injected_commands) {
+            self.run(&ctx, cmd);
+        }
         self.poll(&ctx);
+        self.guard_close(&ctx);
+        self.autosave();
         self.drag_and_drop(&ctx);
         let p = theme::palette(&ctx);
 
@@ -582,6 +879,13 @@ impl eframe::App for App {
             self.header(ui);
             if let Some(view) = &mut self.doc {
                 self.toolbar.ui(ui, view);
+                self.find.ui(ui, view);
+                if std::mem::take(&mut view.insert_image_requested) {
+                    self.injected_commands.push(Command::InsertImage);
+                }
+                if let Some(n) = view.notice.take() {
+                    self.notice = Some((n, now()));
+                }
             }
             let r = ui.max_rect();
             ui.painter().hline(r.x_range(), r.bottom() + 8.0, Stroke::new(1.0, p.hairline));
@@ -608,6 +912,8 @@ impl eframe::App for App {
             None => self.welcome(ui),
         });
 
+        self.dialogs(&ctx);
+
         let ready = match &self.doc {
             Some(d) => d.editor.doc.sections.iter().all(|s| !s.pending),
             None => self.opening.is_none(),
@@ -616,6 +922,16 @@ impl eframe::App for App {
         if let Some(step) = step {
             if step == "save" {
                 self.save(false);
+            } else if step == "quit" {
+                self.run(&ctx, Command::Quit);
+            } else if step == "pagesetup" {
+                self.run(&ctx, Command::PageSetup);
+            } else if step == "find" || step == "replace" {
+                self.run(&ctx, if step == "find" { Command::Find } else { Command::Replace });
+            } else if let Some(text) = step.strip_prefix("keys:") {
+                self.injected.push(egui::Event::Text(text.to_string()));
+            } else if step == "enter" {
+                self.injected.push(egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
             } else if let Some(events) = crate::capture::pointer_events(&step) {
                 self.injected.extend(events);
             } else if let Some(view) = &mut self.doc {

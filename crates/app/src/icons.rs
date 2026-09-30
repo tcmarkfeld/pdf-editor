@@ -31,6 +31,12 @@ pub enum Icon {
     DeleteRow,
     DeleteCol,
     Chevron,
+    ChevronUp,
+    Close,
+    Search,
+    Image,
+    Merge,
+    Split,
     Plus,
     Minus,
     Sidebar,
@@ -239,6 +245,29 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32, size: f3
             if icon == Icon::DeleteRow { pen.grid(Some(1), None, red) } else { pen.grid(None, Some(1), red) }
         }
         Icon::Chevron => pen.polyline(&[(4.5, 6.5), (8.0, 10.0), (11.5, 6.5)]),
+        Icon::ChevronUp => pen.polyline(&[(4.5, 9.5), (8.0, 6.0), (11.5, 9.5)]),
+        Icon::Image => {
+            pen.rect(2.0, 3.0, 14.0, 13.0, 2.0);
+            pen.dot(5.8, 6.4, 1.3);
+            pen.polyline(&[(2.5, 11.5), (6.5, 8.0), (9.0, 10.2), (11.0, 8.5), (13.5, 10.8)]);
+        }
+        Icon::Merge | Icon::Split => {
+            pen.rect(2.0, 3.0, 14.0, 13.0, 1.5);
+            if icon == Icon::Split {
+                pen.line(8.0, 3.5, 8.0, 12.5);
+            }
+            let (a, b) = if icon == Icon::Merge { (4.2, 6.8) } else { (6.8, 4.2) };
+            pen.polyline(&[(a, 6.2), (b, 8.0), (a, 9.8)]);
+            pen.polyline(&[(16.0 - a, 6.2), (16.0 - b, 8.0), (16.0 - a, 9.8)]);
+        }
+        Icon::Search => {
+            painter.circle_stroke(pen.p(7.0, 7.0), 4.2 * scale, Stroke::new(pen.width, color));
+            pen.line(10.2, 10.2, 13.5, 13.5);
+        }
+        Icon::Close => {
+            pen.line(4.5, 4.5, 11.5, 11.5);
+            pen.line(11.5, 4.5, 4.5, 11.5);
+        }
         Icon::Plus => {
             pen.line(3.5, 8.0, 12.5, 8.0);
             pen.line(8.0, 3.5, 8.0, 12.5);

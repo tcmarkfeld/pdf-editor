@@ -73,6 +73,8 @@ pub fn pointer_events(step: &str) -> Option<Vec<egui::Event>> {
     match cmd {
         "hover" => Some(vec![egui::Event::PointerMoved(pos)]),
         "mouse" => Some(vec![egui::Event::PointerMoved(pos), button(true), button(false)]),
+        "down" => Some(vec![egui::Event::PointerMoved(pos), button(true)]),
+        "up" => Some(vec![egui::Event::PointerMoved(pos), button(false)]),
         _ => None,
     }
 }
