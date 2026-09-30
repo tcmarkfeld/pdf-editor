@@ -3,10 +3,17 @@
 #   --dmg      also build dist/Revise.dmg
 #   --install  copy the app to /Applications and register it with Launch
 #              Services (so Finder's Open With offers it for PDFs)
+#   --release  sign with a Developer ID (hardened runtime), build the dmg and
+#              notarize + staple it, ready to publish. Uses $SIGN_IDENTITY
+#              (default: the first "Developer ID Application" identity) and
+#              the notarytool keychain profile $NOTARY_PROFILE (default
+#              revise-notary, see `xcrun notarytool store-credentials`).
 # The bundle is self-contained: PDFium ships in Contents/Frameworks, where the
-# app looks for it first. Signed ad-hoc, which is enough to run on this Mac;
-# distributing to other Macs needs a Developer ID signature + notarization.
+# app looks for it first. Without --release it is signed ad-hoc, which is
+# enough to run on this Mac only.
 set -eu
+release=false
+case " $* " in *" --release "*) release=true ;; esac
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
@@ -77,8 +84,16 @@ if [ -f scripts/icon.png ]; then
   iconutil -c icns "$iconset" -o "$app/Contents/Resources/Revise.icns"
 fi
 
-codesign --force --sign - "$app/Contents/Frameworks/libpdfium.dylib"
-codesign --force --sign - "$app"
+if $release; then
+  identity=${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)}
+  [ -n "$identity" ] || { echo "No Developer ID Application identity found" >&2; exit 1; }
+  sign() { codesign --force --options runtime --timestamp --sign "$identity" "$@"; }
+else
+  sign() { codesign --force --sign - "$@"; }
+fi
+sign "$app/Contents/Frameworks/libpdfium.dylib"
+sign "$app"
+codesign --verify --strict "$app"
 echo "Built $app"
 
 lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -99,11 +114,20 @@ for arg in "$@"; do
   fi
 done
 
-if echo " $* " | grep -q -- " --dmg "; then
+if $release || echo " $* " | grep -q -- " --dmg "; then
   rm -f dist/Revise.dmg
   staging=$(mktemp -d)
   cp -R "$app" "$staging/"
   ln -s /Applications "$staging/Applications"
   hdiutil create -volname Revise -srcfolder "$staging" -ov -format UDZO dist/Revise.dmg >/dev/null
   echo "Built dist/Revise.dmg"
+fi
+
+if $release; then
+  sign dist/Revise.dmg
+  xcrun notarytool submit dist/Revise.dmg --keychain-profile "${NOTARY_PROFILE:-revise-notary}" --wait
+  xcrun stapler staple dist/Revise.dmg
+  spctl --assess --type open --context context:primary-signature -v dist/Revise.dmg
+  echo "Notarized dist/Revise.dmg (version $version)"
+  shasum -a 256 dist/Revise.dmg
 fi
